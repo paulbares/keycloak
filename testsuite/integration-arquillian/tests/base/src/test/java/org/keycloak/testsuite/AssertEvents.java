@@ -333,7 +333,7 @@ public class AssertEvents implements TestRule {
         }
 
         public EventRepresentation assertEvent(EventRepresentation actual) {
-            if (expected.getError() != null && ! expected.getType().toString().endsWith("_ERROR")) {
+            if (expected.getError() != null && ! expected.getType().endsWith("_ERROR")) {
                 expected.setType(expected.getType() + "_ERROR");
             }
             Assert.assertThat("type", actual.getType(), is(expected.getType()));

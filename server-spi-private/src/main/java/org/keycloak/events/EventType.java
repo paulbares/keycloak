@@ -149,6 +149,8 @@ public enum EventType {
     DELETE_ACCOUNT(true),
     DELETE_ACCOUNT_ERROR(true),
 
+    USER_DISABLED_BY_PERMANENT_LOCKOUT(true),
+
     // PAR request.
     PUSHED_AUTHORIZATION_REQUEST(false),
     PUSHED_AUTHORIZATION_REQUEST_ERROR(false);
