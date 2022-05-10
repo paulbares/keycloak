@@ -24,7 +24,8 @@ import org.keycloak.OAuth2Constants;
 import org.keycloak.OAuthErrorException;
 import org.keycloak.TokenCategory;
 import org.keycloak.TokenVerifier;
-import org.keycloak.authentication.AuthenticatorUtil;
+import org.keycloak.authentication.authenticators.util.AcrStore;
+import org.keycloak.authentication.authenticators.util.LoAUtil;
 import org.keycloak.broker.oidc.OIDCIdentityProvider;
 import org.keycloak.broker.provider.IdentityBrokerException;
 import org.keycloak.cluster.ClusterProvider;
@@ -565,7 +566,7 @@ public class TokenManager {
             userSession.setNote(entry.getKey(), entry.getValue());
         }
 
-        clientSession.setNote(Constants.LEVEL_OF_AUTHENTICATION, String.valueOf(AuthenticatorUtil.getCurrentLevelOfAuthentication(authSession)));
+        clientSession.setNote(Constants.LEVEL_OF_AUTHENTICATION, String.valueOf(new AcrStore(authSession).getLevelOfAuthenticationFromCurrentAuthentication()));
         clientSession.setTimestamp(Time.currentTime());
 
         // Remove authentication session now
@@ -883,7 +884,12 @@ public class TokenManager {
         token.setNonce(clientSessionCtx.getAttribute(OIDCLoginProtocol.NONCE_PARAM, String.class));
         token.setScope(clientSessionCtx.getScopeString());
 
-        token.setAcr(getAcr(clientSession));
+        // Backwards compatibility behaviour prior step-up authentication was introduced
+        // Protocol mapper is supposed to set this in case "step_up_authentication" feature enabled
+        if (!Profile.isFeatureEnabled(Profile.Feature.STEP_UP_AUTHENTICATION)) {
+            String acr = AuthenticationManager.isSSOAuthentication(clientSession) ? "0" : "1";
+            token.setAcr(acr);
+        }
 
         String authTime = session.getNote(AuthenticationManager.AUTH_TIME);
         if (authTime != null) {
@@ -898,29 +904,6 @@ public class TokenManager {
         token.expiration(getTokenExpiration(realm, client, session, clientSession, offlineTokenRequested));
 
         return token;
-    }
-
-    private String getAcr(AuthenticatedClientSessionModel clientSession) {
-        int loa = AuthenticatorUtil.getCurrentLevelOfAuthentication(clientSession);
-        if (loa < Constants.MINIMUM_LOA) {
-            loa = AuthenticationManager.isSSOAuthentication(clientSession) ? 0 : 1;
-        }
-
-        Map<String, Integer> acrLoaMap = AcrUtils.getAcrLoaMap(clientSession.getClient());
-        String acr = AcrUtils.mapLoaToAcr(loa, acrLoaMap, AcrUtils.getRequiredAcrValues(
-            clientSession.getNote(OIDCLoginProtocol.CLAIMS_PARAM)));
-        if (acr == null) {
-            acr = AcrUtils.mapLoaToAcr(loa, acrLoaMap, AcrUtils.getAcrValues(
-                clientSession.getNote(OIDCLoginProtocol.CLAIMS_PARAM),
-                clientSession.getNote(OIDCLoginProtocol.ACR_PARAM), clientSession.getClient()));
-            if (acr == null) {
-                acr = AcrUtils.mapLoaToAcr(loa, acrLoaMap, acrLoaMap.keySet());
-                if (acr == null) {
-                    acr = String.valueOf(loa);
-                }
-            }
-        }
-        return acr;
     }
 
     private int getTokenExpiration(RealmModel realm, ClientModel client, UserSessionModel userSession,
@@ -1182,7 +1165,12 @@ public class TokenManager {
             idToken.setAuthTime(accessToken.getAuthTime());
             idToken.setSessionState(accessToken.getSessionState());
             idToken.expiration(accessToken.getExpiration());
-            idToken.setAcr(accessToken.getAcr());
+
+            // Protocol mapper is supposed to set this in case "step_up_authentication" feature enabled
+            if (!Profile.isFeatureEnabled(Profile.Feature.STEP_UP_AUTHENTICATION)) {
+                idToken.setAcr(accessToken.getAcr());
+            }
+
             if (isIdTokenAsDetachedSignature == false) {
                 transformIDToken(session, idToken, userSession, clientSessionCtx);
             }

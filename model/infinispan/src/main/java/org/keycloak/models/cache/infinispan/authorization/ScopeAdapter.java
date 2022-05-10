@@ -39,7 +39,7 @@ public class ScopeAdapter implements Scope, CachedModel<Scope> {
     public Scope getDelegateForUpdate() {
         if (updated == null) {
             cacheSession.registerScopeInvalidation(cached.getId(), cached.getName(), cached.getResourceServerId());
-            updated = cacheSession.getScopeStoreDelegate().findById(cached.getId(), cached.getResourceServerId());
+            updated = cacheSession.getScopeStoreDelegate().findById(getResourceServer(), cached.getId());
             if (updated == null) throw new IllegalStateException("Not found in database");
         }
         return updated;
@@ -66,7 +66,7 @@ public class ScopeAdapter implements Scope, CachedModel<Scope> {
     protected boolean isUpdated() {
         if (updated != null) return true;
         if (!invalidated) return false;
-        updated = cacheSession.getScopeStoreDelegate().findById(cached.getId(), cached.getResourceServerId());
+        updated = cacheSession.getScopeStoreDelegate().findById(getResourceServer(), cached.getId());
         if (updated == null) throw new IllegalStateException("Not found in database");
         return true;
     }
@@ -118,7 +118,7 @@ public class ScopeAdapter implements Scope, CachedModel<Scope> {
 
     @Override
     public ResourceServer getResourceServer() {
-        return cacheSession.getResourceServerStore().findById(cached.getResourceServerId());
+        return cacheSession.getResourceServerStore().findById(null, cached.getResourceServerId());
     }
 
     @Override

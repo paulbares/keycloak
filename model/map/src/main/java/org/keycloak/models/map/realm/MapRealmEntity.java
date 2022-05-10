@@ -332,8 +332,8 @@ public interface MapRealmEntity extends UpdatableEntity, AbstractEntity, EntityW
     Integer getAccessCodeLifespanLogin();
     void setAccessCodeLifespanLogin(Integer accessCodeLifespanLogin);
 
-    Integer getNotBefore();
-    void setNotBefore(Integer notBefore);
+    Long getNotBefore();
+    void setNotBefore(Long notBefore);
 
     Integer getClientSessionIdleTimeout();
     void setClientSessionIdleTimeout(Integer clientSessionIdleTimeout);
@@ -438,6 +438,7 @@ public interface MapRealmEntity extends UpdatableEntity, AbstractEntity, EntityW
 
     Map<String, String> getBrowserSecurityHeaders();
     void setBrowserSecurityHeaders(Map<String, String> headers);
+    void setBrowserSecurityHeader(String name, String value);
 
     Map<String, String> getSmtpConfig();
     void setSmtpConfig(Map<String, String> smtpConfig);

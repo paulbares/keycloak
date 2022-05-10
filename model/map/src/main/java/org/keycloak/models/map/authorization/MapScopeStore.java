@@ -25,17 +25,19 @@ import org.keycloak.authorization.model.Scope.SearchableFields;
 import org.keycloak.authorization.store.ScopeStore;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ModelDuplicateException;
+import org.keycloak.models.RealmModel;
 import org.keycloak.models.map.authorization.adapter.MapScopeAdapter;
 import org.keycloak.models.map.authorization.entity.MapScopeEntity;
 import org.keycloak.models.map.authorization.entity.MapScopeEntityImpl;
 import org.keycloak.models.map.storage.MapKeycloakTransaction;
 import org.keycloak.models.map.storage.MapStorage;
-
 import org.keycloak.models.map.storage.ModelCriteriaBuilder.Operator;
 import org.keycloak.models.map.storage.criteria.DefaultModelCriteria;
+
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.keycloak.common.util.StackUtil.getShortStackTrace;
@@ -47,35 +49,40 @@ public class MapScopeStore implements ScopeStore {
     private static final Logger LOG = Logger.getLogger(MapScopeStore.class);
     private final AuthorizationProvider authorizationProvider;
     final MapKeycloakTransaction<MapScopeEntity, Scope> tx;
+    private final KeycloakSession session;
 
     public MapScopeStore(KeycloakSession session, MapStorage<MapScopeEntity, Scope> scopeStore, AuthorizationProvider provider) {
         this.authorizationProvider = provider;
         this.tx = scopeStore.createTransaction(session);
         session.getTransactionManager().enlist(tx);
+        this.session = session;
     }
 
-    private Scope entityToAdapter(MapScopeEntity origEntity) {
-        if (origEntity == null) return null;
-        // Clone entity before returning back, to avoid giving away a reference to the live object to the caller
-        return new MapScopeAdapter(origEntity, authorizationProvider.getStoreFactory());
+    private Function<MapScopeEntity, Scope> entityToAdapterFunc(ResourceServer resourceServer) {
+        return origEntity -> new MapScopeAdapter(resourceServer == null ? findResourceServer(origEntity) : resourceServer, origEntity, authorizationProvider.getStoreFactory());
     }
 
-    private DefaultModelCriteria<Scope> forResourceServer(String resourceServerId) {
+    private ResourceServer findResourceServer(MapScopeEntity entity) {
+        RealmModel realm = session.realms().getRealm(entity.getRealmId());
+        return authorizationProvider.getStoreFactory().getResourceServerStore().findById(realm, entity.getResourceServerId());
+    }
+
+    private DefaultModelCriteria<Scope> forResourceServer(ResourceServer resourceServer) {
         DefaultModelCriteria<Scope> mcb = criteria();
 
-        return resourceServerId == null
+        return resourceServer == null
                 ? mcb
                 : mcb.compare(SearchableFields.RESOURCE_SERVER_ID, Operator.EQ,
-                resourceServerId);
+                resourceServer.getId());
     }
 
     @Override
-    public Scope create(String id, String name, ResourceServer resourceServer) {
+    public Scope create(ResourceServer resourceServer, String id, String name) {
         LOG.tracef("create(%s, %s, %s)%s", id, name, resourceServer, getShortStackTrace());
 
 
         // @UniqueConstraint(columnNames = {"NAME", "RESOURCE_SERVER_ID"})
-        DefaultModelCriteria<Scope> mcb = forResourceServer(resourceServer.getId())
+        DefaultModelCriteria<Scope> mcb = forResourceServer(resourceServer)
                 .compare(SearchableFields.NAME, Operator.EQ, name);
 
         if (tx.getCount(withCriteria(mcb)) > 0) {
@@ -86,10 +93,11 @@ public class MapScopeStore implements ScopeStore {
         entity.setId(id);
         entity.setName(name);
         entity.setResourceServerId(resourceServer.getId());
+        entity.setRealmId(resourceServer.getRealm().getId());
 
         entity = tx.create(entity);
 
-        return entityToAdapter(entity);
+        return entity == null ? null : entityToAdapterFunc(resourceServer).apply(entity);
     }
 
     @Override
@@ -99,39 +107,39 @@ public class MapScopeStore implements ScopeStore {
     }
 
     @Override
-    public Scope findById(String id, String resourceServerId) {
-        LOG.tracef("findById(%s, %s)%s", id, resourceServerId, getShortStackTrace());
+    public Scope findById(ResourceServer resourceServer, String id) {
+        LOG.tracef("findById(%s, %s)%s", id, resourceServer, getShortStackTrace());
 
-        return tx.read(withCriteria(forResourceServer(resourceServerId)
+        return tx.read(withCriteria(forResourceServer(resourceServer)
                 .compare(SearchableFields.ID, Operator.EQ, id)))
                 .findFirst()
-                .map(this::entityToAdapter)
+                .map(entityToAdapterFunc(resourceServer))
                 .orElse(null);
     }
 
     @Override
-    public Scope findByName(String name, String resourceServerId) {
-        LOG.tracef("findByName(%s, %s)%s", name, resourceServerId, getShortStackTrace());
+    public Scope findByName(ResourceServer resourceServer, String name) {
+        LOG.tracef("findByName(%s, %s)%s", name, resourceServer, getShortStackTrace());
 
-        return tx.read(withCriteria(forResourceServer(resourceServerId).compare(SearchableFields.NAME,
+        return tx.read(withCriteria(forResourceServer(resourceServer).compare(SearchableFields.NAME,
                 Operator.EQ, name)))
                 .findFirst()
-                .map(this::entityToAdapter)
+                .map(entityToAdapterFunc(resourceServer))
                 .orElse(null);
     }
 
     @Override
-    public List<Scope> findByResourceServer(String id) {
-        LOG.tracef("findByResourceServer(%s)%s", id, getShortStackTrace());
+    public List<Scope> findByResourceServer(ResourceServer resourceServer) {
+        LOG.tracef("findByResourceServer(%s)%s", resourceServer, getShortStackTrace());
 
-        return tx.read(withCriteria(forResourceServer(id)))
-                .map(this::entityToAdapter)
+        return tx.read(withCriteria(forResourceServer(resourceServer)))
+                .map(entityToAdapterFunc(resourceServer))
                 .collect(Collectors.toList());
     }
 
     @Override
-    public List<Scope> findByResourceServer(Map<Scope.FilterOption, String[]> attributes, String resourceServerId, int firstResult, int maxResult) {
-        DefaultModelCriteria<Scope> mcb = forResourceServer(resourceServerId);
+    public List<Scope> findByResourceServer(ResourceServer resourceServer, Map<Scope.FilterOption, String[]> attributes, Integer firstResult, Integer maxResults) {
+        DefaultModelCriteria<Scope> mcb = forResourceServer(resourceServer);
 
         for (Scope.FilterOption filterOption : attributes.keySet()) {
             String[] value = attributes.get(filterOption);
@@ -148,8 +156,23 @@ public class MapScopeStore implements ScopeStore {
             }
         }
 
-        return tx.read(withCriteria(mcb).pagination(firstResult, maxResult, SearchableFields.NAME))
-            .map(this::entityToAdapter)
+        return tx.read(withCriteria(mcb).pagination(firstResult, maxResults, SearchableFields.NAME))
+            .map(entityToAdapterFunc(resourceServer))
             .collect(Collectors.toList());
+    }
+
+    public void preRemove(RealmModel realm) {
+        LOG.tracef("preRemove(%s)%s", realm, getShortStackTrace());
+
+        DefaultModelCriteria<Scope> mcb = criteria();
+        mcb = mcb.compare(SearchableFields.REALM_ID, Operator.EQ, realm.getId());
+
+        tx.delete(withCriteria(mcb));
+    }
+
+    public void preRemove(ResourceServer resourceServer) {
+        LOG.tracef("preRemove(%s)%s", resourceServer, getShortStackTrace());
+
+        tx.delete(withCriteria(forResourceServer(resourceServer)));
     }
 }

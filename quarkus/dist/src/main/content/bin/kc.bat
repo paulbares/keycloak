@@ -47,7 +47,6 @@ if "%KEY%" == "--debug" (
 if "%KEY%" == "start-dev" (
   set "CONFIG_ARGS=%CONFIG_ARGS% --profile=dev %KEY% --auto-build"
   shift
-  shift
   goto READ-ARGS
 )
 if not "%KEY:~0,2%"=="--" if "%KEY:~0,2%"=="-D" (
@@ -73,7 +72,7 @@ goto READ-ARGS
 if not "x%JAVA_OPTS%" == "x" (
   echo "JAVA_OPTS already set in environment; overriding default settings with values: %JAVA_OPTS%"
 ) else (
-  set "JAVA_OPTS=-Xms64m -Xmx512m -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=256m -Djava.net.preferIPv4Stack=true"
+  set "JAVA_OPTS=-Xms64m -Xmx512m -XX:MetaspaceSize=96M -XX:MaxMetaspaceSize=256m -Djava.net.preferIPv4Stack=true -Dfile.encoding=UTF-8"
 )
 
 if not "x%JAVA_OPTS_APPEND%" == "x" (

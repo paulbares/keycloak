@@ -1,61 +1,41 @@
 package org.keycloak.operator;
 
-import io.fabric8.kubernetes.api.model.Pod;
-import io.fabric8.kubernetes.api.model.ServiceBuilder;
-import io.fabric8.kubernetes.client.KubernetesClientException;
-import io.fabric8.kubernetes.client.extended.run.RunConfigBuilder;
+import io.fabric8.kubernetes.api.model.LocalObjectReferenceBuilder;
+import io.fabric8.kubernetes.api.model.PodTemplateSpecBuilder;
 import io.quarkus.logging.Log;
 import io.quarkus.test.junit.QuarkusTest;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
+import org.keycloak.operator.utils.CRAssert;
+import org.keycloak.operator.v2alpha1.KeycloakService;
 import org.keycloak.operator.v2alpha1.crds.KeycloakRealmImport;
-import org.keycloak.operator.v2alpha1.crds.KeycloakRealmImportStatusCondition;
-
-import java.util.List;
-import java.util.Map;
+import org.keycloak.operator.v2alpha1.crds.keycloakspec.Unsupported;
 
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.keycloak.operator.Constants.KEYCLOAK_HTTPS_PORT;
+import static org.keycloak.operator.utils.K8sUtils.deployKeycloak;
+import static org.keycloak.operator.utils.K8sUtils.getDefaultKeycloakDeployment;
+import static org.keycloak.operator.utils.K8sUtils.inClusterCurl;
 import static org.keycloak.operator.v2alpha1.crds.KeycloakRealmImportStatusCondition.DONE;
-import static org.keycloak.operator.v2alpha1.crds.KeycloakRealmImportStatusCondition.STARTED;
 import static org.keycloak.operator.v2alpha1.crds.KeycloakRealmImportStatusCondition.HAS_ERRORS;
+import static org.keycloak.operator.v2alpha1.crds.KeycloakRealmImportStatusCondition.STARTED;
 
 @QuarkusTest
 public class RealmImportE2EIT extends ClusterOperatorTest {
 
-    final static String KEYCLOAK_SERVICE_NAME = "example-keycloak";
-    final static int KEYCLOAK_PORT = 8080;
-
-    private KeycloakRealmImportStatusCondition getCondition(List<KeycloakRealmImportStatusCondition> conditions, String type) {
-        return conditions
-                .stream()
-                .filter(c -> c.getType().equals(type))
-                .findFirst()
-                .get();
-    }
-
     @Test
     public void testWorkingRealmImport() {
-        Log.info(((operatorDeployment == OperatorDeployment.remote) ? "Remote " : "Local ") + "Run Test :" + namespace);
         // Arrange
-        k8sclient.load(getClass().getResourceAsStream("/example-postgres.yaml")).inNamespace(namespace).createOrReplace();
-        k8sclient.load(getClass().getResourceAsStream("/example-keycloak.yml")).inNamespace(namespace).createOrReplace();
-
-        k8sclient.services().inNamespace(namespace).create(
-                new ServiceBuilder()
-                        .withNewMetadata()
-                        .withName(KEYCLOAK_SERVICE_NAME)
-                        .withNamespace(namespace)
-                        .endMetadata()
-                        .withNewSpec()
-                        .withSelector(Map.of("app", "keycloak"))
-                        .addNewPort()
-                        .withPort(KEYCLOAK_PORT)
-                        .endPort()
-                        .endSpec()
-                        .build()
-        );
+        var kc = getDefaultKeycloakDeployment();
+        var podTemplate = new PodTemplateSpecBuilder()
+                .withNewSpec()
+                .withImagePullSecrets(new LocalObjectReferenceBuilder().withName("my-empty-secret").build())
+                .endSpec()
+                .build();
+        kc.getSpec().setUnsupported(new Unsupported(podTemplate));
+        deployKeycloak(k8sclient, kc, false);
 
         // Act
         k8sclient.load(getClass().getResourceAsStream("/example-realm.yaml")).inNamespace(namespace).createOrReplace();
@@ -70,14 +50,9 @@ public class RealmImportE2EIT extends ClusterOperatorTest {
                 .pollDelay(5, SECONDS)
                 .ignoreExceptions()
                 .untilAsserted(() -> {
-                    var conditions = crSelector
-                            .get()
-                            .getStatus()
-                            .getConditions();
-
-                    assertThat(getCondition(conditions, DONE).getStatus()).isFalse();
-                    assertThat(getCondition(conditions, STARTED).getStatus()).isTrue();
-                    assertThat(getCondition(conditions, HAS_ERRORS).getStatus()).isFalse();
+                    CRAssert.assertKeycloakRealmImportStatusCondition(crSelector.get(), DONE, false);
+                    CRAssert.assertKeycloakRealmImportStatusCondition(crSelector.get(), STARTED, true);
+                    CRAssert.assertKeycloakRealmImportStatusCondition(crSelector.get(), HAS_ERRORS, false);
                 });
 
         Awaitility.await()
@@ -85,63 +60,31 @@ public class RealmImportE2EIT extends ClusterOperatorTest {
                 .pollDelay(5, SECONDS)
                 .ignoreExceptions()
                 .untilAsserted(() -> {
-                    var conditions = crSelector
-                            .get()
-                            .getStatus()
-                            .getConditions();
-
-                    assertThat(getCondition(conditions, DONE).getStatus()).isTrue();
-                    assertThat(getCondition(conditions, STARTED).getStatus()).isFalse();
-                    assertThat(getCondition(conditions, HAS_ERRORS).getStatus()).isFalse();
+                    CRAssert.assertKeycloakRealmImportStatusCondition(crSelector.get(), DONE, true);
+                    CRAssert.assertKeycloakRealmImportStatusCondition(crSelector.get(), STARTED, false);
+                    CRAssert.assertKeycloakRealmImportStatusCondition(crSelector.get(), HAS_ERRORS, false);
                 });
+        var job = k8sclient.batch().v1().jobs().inNamespace(namespace).withName("example-count0-kc").get();
+        assertThat(job.getSpec().getTemplate().getSpec().getImagePullSecrets().size()).isEqualTo(1);
+        assertThat(job.getSpec().getTemplate().getSpec().getImagePullSecrets().get(0).getName()).isEqualTo("my-empty-secret");
 
+        var service = new KeycloakService(k8sclient, getDefaultKeycloakDeployment());
         String url =
-                "http://" + KEYCLOAK_SERVICE_NAME + "." + namespace + ":" + KEYCLOAK_PORT + "/realms/count0";
+                "https://" + service.getName() + "." + namespace + ":" + KEYCLOAK_HTTPS_PORT + "/realms/count0";
 
-        Awaitility.await().atMost(5, MINUTES).untilAsserted(() -> {
-            try {
-                Log.info("Starting curl Pod to test if the realm is available");
-
-                Pod curlPod = k8sclient.run().inNamespace(namespace)
-                        .withRunConfig(new RunConfigBuilder()
-                                .withArgs("-s", "-o", "/dev/null", "-w", "%{http_code}", url)
-                                .withName("curl")
-                                .withImage("curlimages/curl:7.78.0")
-                                .withRestartPolicy("Never")
-                                .build())
-                        .done();
-                Log.info("Waiting for curl Pod to finish running");
-                Awaitility.await().atMost(2, MINUTES)
-                        .until(() -> {
-                            String phase =
-                                    k8sclient.pods().inNamespace(namespace).withName("curl").get()
-                                            .getStatus().getPhase();
-                            return phase.equals("Succeeded") || phase.equals("Failed");
-                        });
-
-                String curlOutput =
-                        k8sclient.pods().inNamespace(namespace)
-                                .withName(curlPod.getMetadata().getName()).getLog();
-                Log.info("Output from curl: '" + curlOutput + "'");
-                assertThat(curlOutput).isEqualTo("200");
-            } catch (KubernetesClientException ex) {
-                throw new AssertionError(ex);
-            } finally {
-                Log.info("Deleting curl Pod");
-                k8sclient.pods().inNamespace(namespace).withName("curl").delete();
-                Awaitility.await().atMost(1, MINUTES)
-                        .until(() -> k8sclient.pods().inNamespace(namespace).withName("curl")
-                                .get() == null);
-            }
+        Awaitility.await().atMost(10, MINUTES).untilAsserted(() -> {
+            Log.info("Starting curl Pod to test if the realm is available");
+            Log.info("Url: '" + url + "'");
+            String curlOutput = inClusterCurl(k8sclient, namespace, url);
+            Log.info("Output from curl: '" + curlOutput + "'");
+            assertThat(curlOutput).isEqualTo("200");
         });
     }
 
     @Test
     public void testNotWorkingRealmImport() {
-        Log.info(((operatorDeployment == OperatorDeployment.remote) ? "Remote " : "Local ") + "Run Test :" + namespace);
         // Arrange
-        k8sclient.load(getClass().getResourceAsStream("/example-postgres.yaml")).inNamespace(namespace).createOrReplace();
-        k8sclient.load(getClass().getResourceAsStream("/example-keycloak.yml")).inNamespace(namespace).createOrReplace();
+        deployKeycloak(k8sclient, getDefaultKeycloakDeployment(), true); // make sure there are no errors due to missing KC Deployment
 
         // Act
         k8sclient.load(getClass().getResourceAsStream("/incorrect-realm.yaml")).inNamespace(namespace).createOrReplace();
@@ -152,17 +95,14 @@ public class RealmImportE2EIT extends ClusterOperatorTest {
                 .pollDelay(5, SECONDS)
                 .ignoreExceptions()
                 .untilAsserted(() -> {
-                    var conditions = k8sclient
+                    var crSelector = k8sclient
                             .resources(KeycloakRealmImport.class)
                             .inNamespace(namespace)
-                            .withName("example-count0-kc")
-                            .get()
-                            .getStatus()
-                            .getConditions();
+                            .withName("example-count0-kc");
 
-                    assertThat(getCondition(conditions, HAS_ERRORS).getStatus()).isTrue();
-                    assertThat(getCondition(conditions, DONE).getStatus()).isFalse();
-                    assertThat(getCondition(conditions, STARTED).getStatus()).isFalse();
+                    CRAssert.assertKeycloakRealmImportStatusCondition(crSelector.get(), DONE, false);
+                    CRAssert.assertKeycloakRealmImportStatusCondition(crSelector.get(), STARTED, false);
+                    CRAssert.assertKeycloakRealmImportStatusCondition(crSelector.get(), HAS_ERRORS, true);
                 });
     }
 

@@ -17,6 +17,7 @@
 
 package org.keycloak.quarkus.deployment;
 
+import static org.keycloak.quarkus.runtime.Providers.getProviderManager;
 import static org.keycloak.quarkus.runtime.configuration.Configuration.getPropertyNames;
 import static org.keycloak.quarkus.runtime.configuration.MicroProfileConfigProvider.NS_QUARKUS;
 import static org.keycloak.quarkus.runtime.configuration.QuarkusPropertiesConfigSource.QUARKUS_PROPERTY_ENABLED;
@@ -48,6 +49,7 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
@@ -65,6 +67,7 @@ import io.quarkus.deployment.builditem.StaticInitConfigSourceProviderBuildItem;
 import io.quarkus.hibernate.orm.deployment.AdditionalJpaModelBuildItem;
 import io.quarkus.hibernate.orm.deployment.HibernateOrmConfig;
 import io.quarkus.hibernate.orm.deployment.PersistenceXmlDescriptorBuildItem;
+import io.quarkus.hibernate.orm.deployment.integration.HibernateOrmIntegrationRuntimeConfiguredBuildItem;
 import io.quarkus.resteasy.server.common.deployment.ResteasyDeploymentCustomizerBuildItem;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.configuration.ProfileManager;
@@ -84,6 +87,8 @@ import org.jboss.logging.Logger;
 import org.jboss.resteasy.plugins.server.servlet.ResteasyContextParameters;
 import org.jboss.resteasy.spi.ResteasyDeployment;
 import org.keycloak.Config;
+import org.keycloak.connections.jpa.JpaConnectionProvider;
+import org.keycloak.connections.jpa.JpaConnectionSpi;
 import org.keycloak.quarkus.runtime.QuarkusProfile;
 import org.keycloak.quarkus.runtime.configuration.PersistedConfigSource;
 import org.keycloak.quarkus.runtime.configuration.QuarkusPropertiesConfigSource;
@@ -102,6 +107,7 @@ import org.keycloak.quarkus.runtime.configuration.MicroProfileConfigProvider;
 import org.keycloak.connections.jpa.DefaultJpaConnectionProviderFactory;
 import org.keycloak.connections.jpa.updater.liquibase.LiquibaseJpaUpdaterProviderFactory;
 import org.keycloak.connections.jpa.updater.liquibase.conn.DefaultLiquibaseConnectionProvider;
+import org.keycloak.policy.BlacklistPasswordPolicyProviderFactory;
 import org.keycloak.protocol.ProtocolMapperSpi;
 import org.keycloak.protocol.oidc.mappers.DeployedScriptOIDCProtocolMapper;
 import org.keycloak.provider.EnvironmentDependentProviderFactory;
@@ -121,11 +127,15 @@ import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
 import io.quarkus.vertx.http.deployment.FilterBuildItem;
 
+import org.keycloak.quarkus.runtime.storage.database.jpa.NamedJpaConnectionProviderFactory;
+import org.keycloak.quarkus.runtime.themes.FlatClasspathThemeResourceProviderFactory;
 import org.keycloak.representations.provider.ScriptProviderDescriptor;
 import org.keycloak.representations.provider.ScriptProviderMetadata;
 import org.keycloak.quarkus.runtime.integration.web.NotFoundHandler;
 import org.keycloak.services.ServicesLogger;
+import org.keycloak.theme.ClasspathThemeResourceProviderFactory;
 import org.keycloak.theme.FolderThemeProviderFactory;
+import org.keycloak.theme.ThemeResourceSpi;
 import org.keycloak.transaction.JBossJtaTransactionManagerLookup;
 import org.keycloak.quarkus.runtime.Environment;
 import org.keycloak.url.DefaultHostnameProviderFactory;
@@ -153,7 +163,9 @@ class KeycloakProcessor {
             DefaultHostnameProviderFactory.class,
             FixedHostnameProviderFactory.class,
             RequestHostnameProviderFactory.class,
-            FilesPlainTextVaultProviderFactory.class);
+            FilesPlainTextVaultProviderFactory.class,
+            BlacklistPasswordPolicyProviderFactory.class,
+            ClasspathThemeResourceProviderFactory.class);
 
     static {
         DEPLOYEABLE_SCRIPT_PROVIDERS.put(AUTHENTICATORS, KeycloakProcessor::registerScriptAuthenticator);
@@ -191,14 +203,27 @@ class KeycloakProcessor {
      * @param descriptors
      */
     @BuildStep
-    void configureHibernate(HibernateOrmConfig config,
+    @Record(ExecutionTime.RUNTIME_INIT)
+    void configurePersistenceUnits(HibernateOrmConfig config,
             List<PersistenceXmlDescriptorBuildItem> descriptors,
             List<JdbcDataSourceBuildItem> jdbcDataSources,
             BuildProducer<AdditionalJpaModelBuildItem> additionalJpaModel,
-            CombinedIndexBuildItem indexBuildItem) {
-        ParsedPersistenceXmlDescriptor descriptor = descriptors.get(0).getDescriptor();
-        configureJpaProperties(descriptor, config, jdbcDataSources);
-        configureJpaModel(descriptor, indexBuildItem);
+            CombinedIndexBuildItem indexBuildItem,
+            BuildProducer<HibernateOrmIntegrationRuntimeConfiguredBuildItem> runtimeConfigured,
+            KeycloakRecorder recorder) {
+        for (PersistenceXmlDescriptorBuildItem item : descriptors) {
+            ParsedPersistenceXmlDescriptor descriptor = item.getDescriptor();
+
+            if ("keycloak-default".equals(descriptor.getName())) {
+                configureJpaProperties(descriptor, config, jdbcDataSources);
+                configureJpaModel(descriptor, indexBuildItem);
+            } else {
+                Properties properties = descriptor.getProperties();
+                // register a listener for customizing the unit configuration at runtime
+                runtimeConfigured.produce(new HibernateOrmIntegrationRuntimeConfiguredBuildItem("keycloak", descriptor.getName())
+                        .setInitListener(recorder.createUnitListener(properties.getProperty(AvailableSettings.DATASOURCE))));
+            }
+        }
     }
 
     private void configureJpaProperties(ParsedPersistenceXmlDescriptor descriptor, HibernateOrmConfig config,
@@ -245,7 +270,7 @@ class KeycloakProcessor {
     @Consume(RuntimeConfigSetupCompleteBuildItem.class)
     @Record(ExecutionTime.RUNTIME_INIT)
     @BuildStep
-    KeycloakSessionFactoryPreInitBuildItem configureProviders(KeycloakRecorder recorder) {
+    KeycloakSessionFactoryPreInitBuildItem configureProviders(KeycloakRecorder recorder, List<PersistenceXmlDescriptorBuildItem> descriptors) {
         Profile.setInstance(new QuarkusProfile());
         Map<Spi, Map<Class<? extends Provider>, Map<String, Class<? extends ProviderFactory>>>> factories = new HashMap<>();
         Map<Class<? extends Provider>, String> defaultProviders = new HashMap<>();
@@ -253,20 +278,63 @@ class KeycloakProcessor {
 
         for (Entry<Spi, Map<Class<? extends Provider>, Map<String, ProviderFactory>>> entry : loadFactories(preConfiguredProviders)
                 .entrySet()) {
-            checkProviders(entry.getKey(), entry.getValue(), defaultProviders);
+            Spi spi = entry.getKey();
+
+            checkProviders(spi, entry.getValue(), defaultProviders);
 
             for (Entry<Class<? extends Provider>, Map<String, ProviderFactory>> value : entry.getValue().entrySet()) {
                 for (ProviderFactory factory : value.getValue().values()) {
-                    factories.computeIfAbsent(entry.getKey(),
+                    factories.computeIfAbsent(spi,
                             key -> new HashMap<>())
-                            .computeIfAbsent(entry.getKey().getProviderClass(), aClass -> new HashMap<>()).put(factory.getId(),factory.getClass());
+                            .computeIfAbsent(spi.getProviderClass(), aClass -> new HashMap<>()).put(factory.getId(),factory.getClass());
                 }
+            }
+
+            if (spi instanceof JpaConnectionSpi) {
+                configureUserDefinedPersistenceUnits(descriptors, factories, preConfiguredProviders, spi);
+            }
+
+            if (spi instanceof ThemeResourceSpi) {
+                configureThemeResourceProviders(factories, spi);
             }
         }
 
         recorder.configSessionFactory(factories, defaultProviders, preConfiguredProviders, Environment.isRebuild());
 
         return new KeycloakSessionFactoryPreInitBuildItem();
+    }
+
+    private void configureThemeResourceProviders(Map<Spi, Map<Class<? extends Provider>, Map<String, Class<? extends ProviderFactory>>>> factories, Spi spi) {
+        try {
+            ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+            Enumeration<URL> resources = classLoader.getResources(FlatClasspathThemeResourceProviderFactory.THEME_RESOURCES);
+
+            if (resources.hasMoreElements()) {
+                // make sure theme resources are loaded using a flat classpath. if no resources are available the provider is not registered
+                factories.computeIfAbsent(spi, key -> new HashMap<>()).computeIfAbsent(spi.getProviderClass(), aClass -> new HashMap<>()).put(FlatClasspathThemeResourceProviderFactory.ID, FlatClasspathThemeResourceProviderFactory.class);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to install default theme resource provider", e);
+        }
+    }
+
+    private void configureUserDefinedPersistenceUnits(List<PersistenceXmlDescriptorBuildItem> descriptors,
+            Map<Spi, Map<Class<? extends Provider>, Map<String, Class<? extends ProviderFactory>>>> factories,
+            Map<String, ProviderFactory> preConfiguredProviders, Spi spi) {
+        descriptors.stream()
+                .map(PersistenceXmlDescriptorBuildItem::getDescriptor)
+                .map(ParsedPersistenceXmlDescriptor::getName)
+                .filter(Predicate.not("keycloak-default"::equals)).forEach(new Consumer<String>() {
+                    @Override
+                    public void accept(String unitName) {
+                        NamedJpaConnectionProviderFactory factory = new NamedJpaConnectionProviderFactory();
+
+                        factory.setUnitName(unitName);
+
+                        factories.get(spi).get(JpaConnectionProvider.class).put(unitName, NamedJpaConnectionProviderFactory.class);
+                        preConfiguredProviders.put(unitName, factory);
+                    }
+                });
     }
 
     /**
@@ -439,14 +507,7 @@ class KeycloakProcessor {
             Map<String, ProviderFactory> preConfiguredProviders) {
         Config.init(new MicroProfileConfigProvider());
         ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-
-        KeycloakDeploymentInfo keycloakDeploymentInfo = KeycloakDeploymentInfo.create()
-                .name("classpath")
-                .services()
-                // .themes() // handling of .jar based themes is already supported by Keycloak.x
-                .themeResources();
-
-        ProviderManager pm = new ProviderManager(keycloakDeploymentInfo, classLoader);
+        ProviderManager pm = getProviderManager(classLoader);
         Map<Spi, Map<Class<? extends Provider>, Map<String, ProviderFactory>>> factories = new HashMap<>();
 
         for (Spi spi : pm.loadSpis()) {

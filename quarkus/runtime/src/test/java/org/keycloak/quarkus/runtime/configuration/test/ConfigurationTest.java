@@ -122,6 +122,13 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void testKeycloakConfPlaceholder() {
+        assertEquals("warn", createConfig().getRawValue("kc.log-level"));
+        putEnvVar("SOME_LOG_LEVEL", "debug");
+        assertEquals("debug", createConfig().getRawValue("kc.log-level"));
+    }
+
+    @Test
     public void testEnvVarAvailableFromPropertyNames() {
         putEnvVar("KC_VAULT_DIR", "/foo/bar");
         Config.Scope config = initConfig("vault", FilesPlainTextVaultProviderFactory.ID);
@@ -237,7 +244,7 @@ public class ConfigurationTest {
         System.setProperty(CLI_ARGS, "--db=dev-file");
         SmallRyeConfig config = createConfig();
         assertEquals(QuarkusH2Dialect.class.getName(), config.getConfigValue("quarkus.hibernate-orm.dialect").getValue());
-        assertEquals("jdbc:h2:file:~/data/h2/keycloakdb;;AUTO_SERVER=TRUE", config.getConfigValue("quarkus.datasource.jdbc.url").getValue());
+        assertEquals("jdbc:h2:file:" + System.getProperty("user.home") + File.separator + "data" + File.separator + "h2" + File.separator + "keycloakdb;;AUTO_SERVER=TRUE", config.getConfigValue("quarkus.datasource.jdbc.url").getValue());
 
         System.setProperty(CLI_ARGS, "--db=dev-mem");
         config = createConfig();
@@ -274,8 +281,18 @@ public class ConfigurationTest {
         SmallRyeConfig config = createConfig();
         assertEquals("io.quarkus.hibernate.orm.runtime.dialect.QuarkusPostgreSQL10Dialect",
                 config.getConfigValue("quarkus.hibernate-orm.dialect").getValue());
-        assertEquals("jdbc:postgresql://myhost/kcdb?foo=bar", config.getConfigValue("quarkus.datasource.jdbc.url").getValue());
+        assertEquals("jdbc:postgresql://myhost:5432/kcdb?foo=bar", config.getConfigValue("quarkus.datasource.jdbc.url").getValue());
         assertEquals("postgresql", config.getConfigValue("quarkus.datasource.db-kind").getValue());
+    }
+
+    @Test
+    public void testDefaultDbPortGetApplied() {
+        System.setProperty(CLI_ARGS, "--db=mssql" + ARG_SEPARATOR + "--db-url-host=myhost" + ARG_SEPARATOR + "--db-url-database=kcdb" + ARG_SEPARATOR + "--db-url-port=1234" + ARG_SEPARATOR + "--db-url-properties=?foo=bar");
+        SmallRyeConfig config = createConfig();
+        assertEquals("org.hibernate.dialect.SQLServer2016Dialect",
+                config.getConfigValue("quarkus.hibernate-orm.dialect").getValue());
+        assertEquals("jdbc:sqlserver://myhost:1234;databaseName=kcdb?foo=bar", config.getConfigValue("quarkus.datasource.jdbc.url").getValue());
+        assertEquals("mssql", config.getConfigValue("quarkus.datasource.db-kind").getValue());
     }
 
     @Test
@@ -306,13 +323,13 @@ public class ConfigurationTest {
         System.setProperty("kc.db-url-properties", "?test=test&test1=test1");
         System.setProperty(CLI_ARGS, "--db=mariadb");
         config = createConfig();
-        assertEquals("jdbc:mariadb://localhost/keycloak?test=test&test1=test1", config.getConfigValue("quarkus.datasource.jdbc.url").getValue());
+        assertEquals("jdbc:mariadb://localhost:3306/keycloak?test=test&test1=test1", config.getConfigValue("quarkus.datasource.jdbc.url").getValue());
         assertEquals(MariaDBDialect.class.getName(), config.getConfigValue("quarkus.hibernate-orm.dialect").getValue());
         assertEquals(MySQLDataSource.class.getName(), config.getConfigValue("quarkus.datasource.jdbc.driver").getValue());
 
         System.setProperty(CLI_ARGS, "--db=postgres");
         config = createConfig();
-        assertEquals("jdbc:postgresql://localhost/keycloak?test=test&test1=test1", config.getConfigValue("quarkus.datasource.jdbc.url").getValue());
+        assertEquals("jdbc:postgresql://localhost:5432/keycloak?test=test&test1=test1", config.getConfigValue("quarkus.datasource.jdbc.url").getValue());
         assertEquals(QuarkusPostgreSQL10Dialect.class.getName(), config.getConfigValue("quarkus.hibernate-orm.dialect").getValue());
         assertEquals(PGXADataSource.class.getName(), config.getConfigValue("quarkus.datasource.jdbc.driver").getValue());
 
@@ -390,6 +407,12 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void testDatabaseDialectSetExplicitly() {
+        System.setProperty(CLI_ARGS, "--db-dialect=user-defined");
+        assertEquals("user-defined", createConfig().getRawValue("quarkus.hibernate-orm.dialect"));
+    }
+
+    @Test
     public void testTransactionTypeChangesDriver() {
         System.setProperty(CLI_ARGS, "--db=mssql" + ARG_SEPARATOR + "--transaction-xa-enabled=false");
         assertTrue(System.getProperty(CLI_ARGS, "").contains("mssql"));
@@ -417,6 +440,24 @@ public class ConfigurationTest {
         System.setProperty(CLI_ARGS, "--metrics-enabled=true");
         SmallRyeConfig config = createConfig();
         assertEquals("true", config.getConfigValue("quarkus.datasource.metrics.enabled").getValue());
+    }
+
+    @Test
+    public void testLogHandlerConfig() {
+        System.setProperty(CLI_ARGS, "--log=console,file");
+        SmallRyeConfig config = createConfig();
+        assertEquals("true", config.getConfigValue("quarkus.log.console.enable").getValue());
+        assertEquals("true", config.getConfigValue("quarkus.log.file.enable").getValue());
+
+        System.setProperty(CLI_ARGS, "--log=file");
+        SmallRyeConfig config2 = createConfig();
+        assertEquals("false", config2.getConfigValue("quarkus.log.console.enable").getValue());
+        assertEquals("true", config2.getConfigValue("quarkus.log.file.enable").getValue());
+
+        System.setProperty(CLI_ARGS, "--log=console");
+        SmallRyeConfig config3 = createConfig();
+        assertEquals("true", config3.getConfigValue("quarkus.log.console.enable").getValue());
+        assertEquals("false", config3.getConfigValue("quarkus.log.file.enable").getValue());
     }
 
     @Test

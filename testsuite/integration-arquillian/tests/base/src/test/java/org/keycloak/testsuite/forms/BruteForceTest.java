@@ -23,6 +23,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.keycloak.OAuth2Constants;
 import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
 import org.keycloak.events.EventType;
@@ -614,7 +615,9 @@ public class BruteForceTest extends AbstractTestRealmKeycloakTest {
 
         Assert.assertEquals(RequestType.AUTH_RESPONSE, appPage.getRequestType());
 
-        appPage.logout();
+        String code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        String idTokenHint = oauth.doAccessTokenRequest(code, "password").getIdToken();
+        appPage.logout(idTokenHint);
 
         events.clear();
     }
@@ -679,7 +682,9 @@ public class BruteForceTest extends AbstractTestRealmKeycloakTest {
 
         events.expectLogin().assertEvent();
 
-        appPage.logout();
+        String code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        String idTokenHint = oauth.doAccessTokenRequest(code, "password").getIdToken();
+        appPage.logout(idTokenHint);
         events.clear();
     }
 
@@ -704,7 +709,9 @@ public class BruteForceTest extends AbstractTestRealmKeycloakTest {
         Assert.assertEquals(RequestType.AUTH_RESPONSE, appPage.getRequestType());
 
         events.expectLogin().assertEvent();
-        appPage.logout();
+        String code = oauth.getCurrentQuery().get(OAuth2Constants.CODE);
+        String idTokenHint = oauth.doAccessTokenRequest(code, "password").getIdToken();
+        appPage.logout(idTokenHint);
         events.clear();
     }
 

@@ -17,7 +17,11 @@
 
 package org.keycloak.models.map.authorization.adapter;
 
+import org.keycloak.authorization.model.PermissionTicket;
+import org.keycloak.authorization.model.ResourceServer;
 import org.keycloak.authorization.model.Scope;
+import org.keycloak.authorization.store.PermissionTicketStore;
+import org.keycloak.authorization.store.PolicyStore;
 import org.keycloak.authorization.store.StoreFactory;
 
 import org.keycloak.models.map.authorization.entity.MapResourceEntity;
@@ -25,13 +29,18 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 public class MapResourceAdapter extends AbstractResourceModel<MapResourceEntity> {
 
-    public MapResourceAdapter(MapResourceEntity entity, StoreFactory storeFactory) {
+    private final ResourceServer resourceServer;
+
+    public MapResourceAdapter(ResourceServer resourceServer, MapResourceEntity entity, StoreFactory storeFactory) {
         super(entity, storeFactory);
+        Objects.requireNonNull(resourceServer);
+        this.resourceServer = resourceServer;
     }
 
     @Override
@@ -87,9 +96,10 @@ public class MapResourceAdapter extends AbstractResourceModel<MapResourceEntity>
     @Override
     public List<Scope> getScopes() {
         Set<String> ids = entity.getScopeIds();
+        ResourceServer resourceServer = getResourceServer();
         return ids == null ? Collections.emptyList() : ids.stream()
                 .map(id -> storeFactory
-                        .getScopeStore().findById(id, entity.getResourceServerId()))
+                        .getScopeStore().findById(resourceServer, id))
                 .collect(Collectors.toList());
     }
 
@@ -105,8 +115,8 @@ public class MapResourceAdapter extends AbstractResourceModel<MapResourceEntity>
     }
 
     @Override
-    public String getResourceServer() {
-        return entity.getResourceServerId();
+    public ResourceServer getResourceServer() {
+        return resourceServer;
     }
 
     @Override
@@ -129,6 +139,25 @@ public class MapResourceAdapter extends AbstractResourceModel<MapResourceEntity>
     @Override
     public void updateScopes(Set<Scope> scopes) {
         throwExceptionIfReadonly();
+
+        PermissionTicketStore permissionStore = storeFactory.getPermissionTicketStore();
+        PolicyStore policyStore = storeFactory.getPolicyStore();
+
+        for (Scope scope : getScopes()) {
+            if (!scopes.contains(scope)) {
+                // The scope^ was removed from the Resource
+
+                // Remove permission tickets based on the scope
+                List<PermissionTicket> permissions = permissionStore.findByScope(resourceServer, scope);
+                for (PermissionTicket permission : permissions) {
+                    permissionStore.delete(permission.getId());
+                }
+
+                // Remove the scope from each Policy for this Resource
+                policyStore.findByResource(resourceServer, this, policy -> policy.removeScope(scope));
+            }
+        }
+
         entity.setScopeIds(scopes.stream().map(Scope::getId).collect(Collectors.toSet()));
     }
 

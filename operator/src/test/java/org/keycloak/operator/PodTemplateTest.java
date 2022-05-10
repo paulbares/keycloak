@@ -33,18 +33,16 @@ public class PodTemplateTest {
                     public String imagePullPolicy() {
                         return "Never";
                     }
-                    @Override
-                    public String initContainerImage() { return "quay.io/keycloak/keycloak-init-container:legacy"; }
-                    @Override
-                    public String initContainerImagePullPolicy() { return "Always"; }
                 };
             }
         };
         var kc = new Keycloak();
         var spec = new KeycloakSpec();
         spec.setUnsupported(new Unsupported(podTemplate));
+        spec.setHostname("example.com");
+        spec.setTlsSecret("example-tls-secret");
         kc.setSpec(spec);
-        var deployment = new KeycloakDeployment(null, config, kc, new Deployment());
+        var deployment = new KeycloakDeployment(null, config, kc, new Deployment(), "dummy-admin");
         return (Deployment) deployment.getReconciledResource().get();
     }
 
@@ -98,7 +96,7 @@ public class PodTemplateTest {
         var podTemplate = getDeployment(additionalPodTemplate).getSpec().getTemplate();
 
         // Assert
-        assertEquals(volumeName, podTemplate.getSpec().getVolumes().get(0).getName());
+        assertEquals(volumeName, podTemplate.getSpec().getVolumes().get(1).getName());
     }
 
     @Test
@@ -121,8 +119,8 @@ public class PodTemplateTest {
         var podTemplate = getDeployment(additionalPodTemplate).getSpec().getTemplate();
 
         // Assert
-        assertEquals(volumeMountName, podTemplate.getSpec().getContainers().get(0).getVolumeMounts().get(0).getName());
-        assertEquals(volumeMountPath, podTemplate.getSpec().getContainers().get(0).getVolumeMounts().get(0).getMountPath());
+        assertEquals(volumeMountName, podTemplate.getSpec().getContainers().get(0).getVolumeMounts().get(1).getName());
+        assertEquals(volumeMountPath, podTemplate.getSpec().getContainers().get(0).getVolumeMounts().get(1).getMountPath());
     }
 
     @Test

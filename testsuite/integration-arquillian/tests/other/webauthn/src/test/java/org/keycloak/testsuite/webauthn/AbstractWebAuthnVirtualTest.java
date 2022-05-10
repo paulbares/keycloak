@@ -41,7 +41,9 @@ import org.keycloak.testsuite.admin.ApiUtil;
 import org.keycloak.testsuite.arquillian.annotation.AuthServerContainerExclude;
 import org.keycloak.testsuite.arquillian.annotation.EnableFeature;
 import org.keycloak.testsuite.pages.AppPage;
+import org.keycloak.testsuite.pages.InfoPage;
 import org.keycloak.testsuite.pages.LoginPage;
+import org.keycloak.testsuite.pages.LogoutConfirmPage;
 import org.keycloak.testsuite.pages.RegisterPage;
 import org.keycloak.testsuite.util.WaitUtils;
 import org.keycloak.testsuite.webauthn.authenticators.DefaultVirtualAuthOptions;
@@ -82,7 +84,6 @@ import static org.keycloak.testsuite.util.WaitUtils.waitForPageToLoad;
  *
  * @author <a href="mailto:mabartos@redhat.com">Martin Bartos</a>
  */
-@EnableFeature(value = Profile.Feature.WEB_AUTHN, skipRestart = true, onlyForProduct = true)
 @AuthServerContainerExclude(REMOTE)
 public abstract class AbstractWebAuthnVirtualTest extends AbstractTestRealmKeycloakTest implements UseVirtualAuthenticators {
 
@@ -106,6 +107,12 @@ public abstract class AbstractWebAuthnVirtualTest extends AbstractTestRealmKeycl
 
     @Page
     protected AppPage appPage;
+
+    @Page
+    protected LogoutConfirmPage logoutConfirmPage;
+
+    @Page
+    protected InfoPage infoPage;
 
     protected static final String ALL_ZERO_AAGUID = "00000000-0000-0000-0000-000000000000";
     protected static final String ALL_ONE_AAGUID = "11111111-1111-1111-1111-111111111111";
@@ -384,9 +391,11 @@ public abstract class AbstractWebAuthnVirtualTest extends AbstractTestRealmKeycl
     protected void logout() {
         try {
             waitForPageToLoad();
-            appPage.open();
-            appPage.assertCurrent();
-            appPage.logout();
+            String logoutUrl = oauth.getLogoutUrl().build();
+            driver.navigate().to(logoutUrl);
+            logoutConfirmPage.assertCurrent();
+            logoutConfirmPage.confirmLogout();
+            infoPage.assertCurrent();
             waitForPageToLoad();
         } catch (Exception e) {
             throw new RuntimeException("Cannot logout user", e);
