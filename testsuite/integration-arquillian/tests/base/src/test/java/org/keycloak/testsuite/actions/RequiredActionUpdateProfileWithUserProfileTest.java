@@ -20,6 +20,7 @@ import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import static org.keycloak.testsuite.forms.VerifyProfileTest.PERMISSIONS_ALL;
@@ -44,7 +45,6 @@ import org.keycloak.events.EventType;
 import org.keycloak.representations.idm.ClientRepresentation;
 import org.keycloak.representations.idm.RealmRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
-import org.keycloak.testsuite.arquillian.annotation.AuthServerContainerExclude;
 import org.keycloak.testsuite.arquillian.annotation.EnableFeature;
 import org.keycloak.testsuite.forms.RegisterWithUserProfileTest;
 import org.keycloak.testsuite.forms.VerifyProfileTest;
@@ -59,7 +59,6 @@ import org.openqa.selenium.By;
  *
  */
 @EnableFeature(value = Profile.Feature.DECLARATIVE_USER_PROFILE)
-@AuthServerContainerExclude(AuthServerContainerExclude.AuthServer.REMOTE)
 public class RequiredActionUpdateProfileWithUserProfileTest extends RequiredActionUpdateProfileTest {
 
     protected static final String PASSWORD = "password";
@@ -300,6 +299,7 @@ public class RequiredActionUpdateProfileWithUserProfileTest extends RequiredActi
         assertThat(StringUtils.isEmpty(user.getLastName()), is(true));
         Assert.assertEquals("new@email.com", user.getEmail());
         Assert.assertEquals(USERNAME1, user.getUsername());
+        assertNull(user.getLastName());
     }
 
     @Test

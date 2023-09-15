@@ -20,7 +20,7 @@ package org.keycloak.testsuite.account;
 
 import java.io.IOException;
 
-import javax.ws.rs.BadRequestException;
+import jakarta.ws.rs.BadRequestException;
 
 import org.jboss.logging.Logger;
 import org.junit.Assert;
@@ -31,18 +31,16 @@ import org.keycloak.representations.account.UserRepresentation;
 import org.keycloak.representations.idm.ErrorRepresentation;
 import org.keycloak.services.messages.Messages;
 import org.keycloak.testsuite.admin.ApiUtil;
-import org.keycloak.testsuite.arquillian.annotation.AuthServerContainerExclude;
 
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.Assert.assertTrue;
-import static org.keycloak.testsuite.arquillian.annotation.AuthServerContainerExclude.AuthServer.REMOTE;
 
 /**
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
  */
-@AuthServerContainerExclude({REMOTE}) // TODO: Enable this for quarkus and hopefully for remote as well...
 public class AccountRestServiceReadOnlyAttributesTest extends AbstractRestServiceTest {
 
     private static final Logger logger = Logger.getLogger(AccountRestServiceReadOnlyAttributesTest.class);
@@ -101,7 +99,7 @@ public class AccountRestServiceReadOnlyAttributesTest extends AbstractRestServic
     private void testAccountUpdateAttributeExpectFailure(String attrName, boolean deniedForAdminAsWell) throws IOException {
         // Attribute not yet supposed to be on the user
         UserRepresentation user = SimpleHttp.doGet(getAccountUrl(null), httpClient).auth(tokenUtil.getToken()).asJson(UserRepresentation.class);
-        Assert.assertThat(user.getAttributes().keySet(), not(contains(attrName)));
+        assertThat(user.getAttributes().keySet(), not(contains(attrName)));
 
         // Assert not possible to add the attribute to the user
         user.singleAttribute(attrName, "foo");
@@ -149,7 +147,7 @@ public class AccountRestServiceReadOnlyAttributesTest extends AbstractRestServic
     private void testAccountUpdateAttributeExpectSuccess(String attrName) throws IOException {
         // Attribute not yet supposed to be on the user
         UserRepresentation user = SimpleHttp.doGet(getAccountUrl(null), httpClient).auth(tokenUtil.getToken()).asJson(UserRepresentation.class);
-        Assert.assertThat(user.getAttributes().keySet(), not(contains(attrName)));
+        assertThat(user.getAttributes().keySet(), not(contains(attrName)));
 
         // Assert not possible to add the attribute to the user
         user.singleAttribute(attrName, "foo");

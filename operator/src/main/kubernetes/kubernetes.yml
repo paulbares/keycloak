@@ -9,7 +9,7 @@ rules:
       # https://github.com/fabric8io/kubernetes-client/issues/3996
       - extensions
     resources:
-      - deployments
+      - statefulsets
     verbs:
       - get
       - list
@@ -31,6 +31,12 @@ rules:
       - delete
       - patch
       - update
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - list
   - apiGroups:
       - batch
     resources:

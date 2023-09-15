@@ -23,6 +23,7 @@ import org.keycloak.common.constants.KerberosConstants;
 import org.keycloak.component.ComponentModel;
 import org.keycloak.component.ComponentValidationException;
 import org.keycloak.federation.kerberos.CommonKerberosConfig;
+import org.keycloak.federation.kerberos.KerberosConfig;
 import org.keycloak.federation.kerberos.impl.KerberosServerSubjectAuthenticator;
 import org.keycloak.federation.kerberos.impl.KerberosUsernamePasswordAuthenticator;
 import org.keycloak.federation.kerberos.impl.SPNEGOAuthenticator;
@@ -39,14 +40,17 @@ import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.provider.ProviderConfigProperty;
 import org.keycloak.provider.ProviderConfigurationBuilder;
 import org.keycloak.representations.idm.CredentialRepresentation;
+import org.keycloak.storage.UserStoragePrivateUtil;
 import org.keycloak.storage.UserStorageProvider;
 import org.keycloak.storage.UserStorageProviderFactory;
 import org.keycloak.storage.UserStorageProviderModel;
+import org.keycloak.storage.UserStorageUtil;
 import org.keycloak.storage.ldap.idm.model.LDAPObject;
 import org.keycloak.storage.ldap.idm.query.Condition;
 import org.keycloak.storage.ldap.idm.query.internal.LDAPQuery;
 import org.keycloak.storage.ldap.idm.query.internal.LDAPQueryConditionsBuilder;
 import org.keycloak.storage.ldap.idm.store.ldap.LDAPIdentityStore;
+import org.keycloak.storage.ldap.kerberos.LDAPProviderKerberosConfig;
 import org.keycloak.storage.ldap.mappers.FullNameLDAPStorageMapper;
 import org.keycloak.storage.ldap.mappers.FullNameLDAPStorageMapperFactory;
 import org.keycloak.storage.ldap.mappers.HardcodedLDAPAttributeMapper;
@@ -162,7 +166,7 @@ public class LDAPStorageProviderFactory implements UserStorageProviderFactory<LD
                 .add()
                 .property().name(LDAPConstants.USE_TRUSTSTORE_SPI)
                 .type(ProviderConfigProperty.STRING_TYPE)
-                .defaultValue("ldapsOnly")
+                .defaultValue("always")
                 .add()
                 .property().name(LDAPConstants.CONNECTION_POOLING)
                 .type(ProviderConfigProperty.BOOLEAN_TYPE)
@@ -212,6 +216,9 @@ public class LDAPStorageProviderFactory implements UserStorageProviderFactory<LD
                 .property().name(KerberosConstants.KERBEROS_REALM)
                 .type(ProviderConfigProperty.STRING_TYPE)
                 .add()
+                .property().name(KerberosConstants.KERBEROS_PRINCIPAL_ATTRIBUTE)
+                .type(ProviderConfigProperty.STRING_TYPE)
+                .add()
                 .property().name(KerberosConstants.DEBUG)
                 .type(ProviderConfigProperty.BOOLEAN_TYPE)
                 .defaultValue("false")
@@ -219,9 +226,6 @@ public class LDAPStorageProviderFactory implements UserStorageProviderFactory<LD
                 .property().name(KerberosConstants.USE_KERBEROS_FOR_PASSWORD_AUTHENTICATION)
                 .type(ProviderConfigProperty.BOOLEAN_TYPE)
                 .defaultValue("false")
-                .add()
-                .property().name(KerberosConstants.SERVER_PRINCIPAL)
-                .type(ProviderConfigProperty.STRING_TYPE)
                 .add()
                 .build();
     }
@@ -430,10 +434,17 @@ public class LDAPStorageProviderFactory implements UserStorageProviderFactory<LD
             mapperModel = KeycloakModelUtils.createComponentModel("MSAD account controls", model.getId(), MSADUserAccountControlStorageMapperFactory.PROVIDER_ID,LDAPStorageMapper.class.getName());
             realm.addComponentModel(mapperModel);
         }
-        String allowKerberosCfg = model.getConfig().getFirst(KerberosConstants.ALLOW_KERBEROS_AUTHENTICATION);
-        if (Boolean.valueOf(allowKerberosCfg)) {
+
+        LDAPProviderKerberosConfig kerberosConfig = new LDAPProviderKerberosConfig(model);
+        if (kerberosConfig.isAllowKerberosAuthentication()) {
             CredentialHelper.setOrReplaceAuthenticationRequirement(session, realm, CredentialRepresentation.KERBEROS,
                     AuthenticationExecutionModel.Requirement.ALTERNATIVE, AuthenticationExecutionModel.Requirement.DISABLED);
+        }
+
+        if (kerberosConfig.getKerberosPrincipalAttribute() == null) {
+            String defaultKerberosUserPrincipalAttr = LDAPUtils.getDefaultKerberosUserPrincipalAttribute(ldapConfig.getVendor());
+            model.getConfig().putSingle(KerberosConstants.KERBEROS_PRINCIPAL_ATTRIBUTE, defaultKerberosUserPrincipalAttr);
+            realm.updateComponent(model);
         }
 
         // In case that "Sync Registration" is ON and the LDAP v3 Password-modify extension is ON, we will create hardcoded mapper to create
@@ -606,8 +617,8 @@ public class LDAPStorageProviderFactory implements UserStorageProviderFactory<LD
                         String username = LDAPUtils.getUsername(ldapUser, ldapFedProvider.getLdapIdentityStore().getConfig());
                         exists.value = true;
                         LDAPUtils.checkUuid(ldapUser, ldapFedProvider.getLdapIdentityStore().getConfig());
-                        UserModel currentUserLocal = session.userLocalStorage().getUserByUsername(currentRealm, username);
-                        Optional<UserModel> userModelOptional = session.userLocalStorage()
+                        UserModel currentUserLocal = UserStoragePrivateUtil.userLocalStorage(session).getUserByUsername(currentRealm, username);
+                        Optional<UserModel> userModelOptional = UserStoragePrivateUtil.userLocalStorage(session)
                                 .searchForUserByUserAttributeStream(currentRealm, LDAPConstants.LDAP_ID, ldapUser.getUuid())
                                 .findFirst();
                         if (!userModelOptional.isPresent() && currentUserLocal == null) {
@@ -629,7 +640,7 @@ public class LDAPStorageProviderFactory implements UserStorageProviderFactory<LD
                                             ldapMapper.onImportUserFromLDAP(ldapUser, currentUser, currentRealm, false);
                                         });
 
-                                UserCache userCache = session.userCache();
+                                UserCache userCache = UserStorageUtil.userCache(session);
                                 if (userCache != null) {
                                     userCache.evict(currentRealm, currentUser);
                                 }
@@ -664,13 +675,13 @@ public class LDAPStorageProviderFactory implements UserStorageProviderFactory<LD
                             }
 
                             if (username != null) {
-                                UserModel existing = session.userLocalStorage().getUserByUsername(currentRealm, username);
+                                UserModel existing = UserStoragePrivateUtil.userLocalStorage(session).getUserByUsername(currentRealm, username);
                                 if (existing != null) {
-                                    UserCache userCache = session.userCache();
+                                    UserCache userCache = UserStorageUtil.userCache(session);
                                     if (userCache != null) {
                                         userCache.evict(currentRealm, existing);
                                     }
-                                    session.userLocalStorage().removeUser(currentRealm, existing);
+                                    UserStoragePrivateUtil.userLocalStorage(session).removeUser(currentRealm, existing);
                                 }
                             }
                         }

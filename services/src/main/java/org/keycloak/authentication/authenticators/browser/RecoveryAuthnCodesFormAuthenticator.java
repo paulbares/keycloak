@@ -11,7 +11,6 @@ import org.keycloak.events.Errors;
 import org.keycloak.forms.login.LoginFormsProvider;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
-import org.keycloak.models.UserCredentialManager;
 import org.keycloak.models.UserCredentialModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.credential.RecoveryAuthnCodesCredentialModel;
@@ -20,18 +19,15 @@ import org.keycloak.models.utils.FormMessage;
 import org.keycloak.services.messages.Messages;
 import org.keycloak.sessions.AuthenticationSessionModel;
 
-import javax.ws.rs.core.MultivaluedMap;
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
 import java.util.Optional;
 
 import static org.keycloak.services.validation.Validation.FIELD_USERNAME;
 
 public class RecoveryAuthnCodesFormAuthenticator implements Authenticator {
 
-    private final UserCredentialManager userCredentialManager;
-
     public RecoveryAuthnCodesFormAuthenticator(KeycloakSession keycloakSession) {
-        this.userCredentialManager = keycloakSession.userCredentialManager();
     }
 
     @Override
@@ -61,7 +57,7 @@ public class RecoveryAuthnCodesFormAuthenticator implements Authenticator {
         RealmModel targetRealm = authnFlowContext.getRealm();
         UserModel authenticatedUser = authnFlowContext.getUser();
         if (!isDisabledByBruteForce(authnFlowContext, authenticatedUser)) {
-            boolean isValid = this.userCredentialManager.isValid(targetRealm, authenticatedUser,
+            boolean isValid = authenticatedUser.credentialManager().isValid(
                     UserCredentialModel.buildFromBackupAuthnCode(recoveryAuthnCodeUserInput.replace("-", "")));
             if (!isValid) {
                 Response responseChallenge = createLoginForm(authnFlowContext, true,
@@ -70,14 +66,14 @@ public class RecoveryAuthnCodesFormAuthenticator implements Authenticator {
                 authnFlowContext.failureChallenge(AuthenticationFlowError.INVALID_CREDENTIALS, responseChallenge);
             } else {
                 result = true;
-                Optional<CredentialModel> optUserCredentialFound = this.userCredentialManager.getStoredCredentialsByTypeStream(targetRealm,
-                        authenticatedUser, RecoveryAuthnCodesCredentialModel.TYPE).findFirst();
+                Optional<CredentialModel> optUserCredentialFound = authenticatedUser.credentialManager().getStoredCredentialsByTypeStream(
+                        RecoveryAuthnCodesCredentialModel.TYPE).findFirst();
                 RecoveryAuthnCodesCredentialModel recoveryCodeCredentialModel = null;
                 if (optUserCredentialFound.isPresent()) {
                     recoveryCodeCredentialModel = RecoveryAuthnCodesCredentialModel
                             .createFromCredentialModel(optUserCredentialFound.get());
                     if (recoveryCodeCredentialModel.allCodesUsed()) {
-                        this.userCredentialManager.removeStoredCredential(targetRealm, authenticatedUser,
+                        authenticatedUser.credentialManager().removeStoredCredentialById(
                                 recoveryCodeCredentialModel.getId());
                     }
                 }
@@ -137,7 +133,7 @@ public class RecoveryAuthnCodesFormAuthenticator implements Authenticator {
 
     @Override
     public boolean configuredFor(KeycloakSession session, RealmModel realm, UserModel user) {
-        return session.userCredentialManager().isConfiguredFor(realm, user, RecoveryAuthnCodesCredentialModel.TYPE);
+        return user.credentialManager().isConfiguredFor(RecoveryAuthnCodesCredentialModel.TYPE);
     }
 
     @Override

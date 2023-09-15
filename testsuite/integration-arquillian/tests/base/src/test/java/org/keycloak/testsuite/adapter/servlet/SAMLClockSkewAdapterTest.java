@@ -39,6 +39,8 @@ import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import org.jboss.arquillian.graphene.page.Page;
+
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.keycloak.testsuite.adapter.AbstractServletsAdapterTest.samlServletDeployment;
 import org.keycloak.testsuite.adapter.page.SalesPostClockSkewServlet;
 import static org.keycloak.testsuite.util.SamlClient.Binding.POST;
@@ -46,7 +48,6 @@ import static org.keycloak.testsuite.util.SamlClient.Binding.POST;
 
 @AppServerContainer(ContainerConstants.APP_SERVER_UNDERTOW)
 @AppServerContainer(ContainerConstants.APP_SERVER_WILDFLY)
-@AppServerContainer(ContainerConstants.APP_SERVER_WILDFLY_DEPRECATED)
 @AppServerContainer(ContainerConstants.APP_SERVER_EAP)
 @AppServerContainer(ContainerConstants.APP_SERVER_EAP6)
 @AppServerContainer(ContainerConstants.APP_SERVER_EAP71)
@@ -90,7 +91,7 @@ public class SAMLClockSkewAdapterTest extends AbstractSAMLServletAdapterTest {
                         return doc;
                     }).build().executeAndTransform(resp -> EntityUtils.toString(resp.getEntity()));
 
-            Assert.assertThat(resultPage, matcher);
+            assertThat(resultPage, matcher);
         } finally {
             setAdapterAndServerTimeOffset(0, salesPostClockSkewServletPage.toString());
         }
@@ -137,7 +138,6 @@ public class SAMLClockSkewAdapterTest extends AbstractSAMLServletAdapterTest {
     @AppServerContainer(ContainerConstants.APP_SERVER_TOMCAT9)
     @AppServerContainer(value = ContainerConstants.APP_SERVER_UNDERTOW, skip = true)
     @AppServerContainer(value = ContainerConstants.APP_SERVER_WILDFLY, skip = true)
-    @AppServerContainer(value = ContainerConstants.APP_SERVER_WILDFLY_DEPRECATED, skip = true)
     @AppServerContainer(value = ContainerConstants.APP_SERVER_EAP, skip = true)
     @AppServerContainer(value = ContainerConstants.APP_SERVER_EAP6, skip = true)
     @AppServerContainer(value = ContainerConstants.APP_SERVER_EAP71, skip = true)

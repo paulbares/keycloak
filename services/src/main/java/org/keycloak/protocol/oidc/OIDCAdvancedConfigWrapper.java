@@ -20,15 +20,12 @@ package org.keycloak.protocol.oidc;
 import static org.keycloak.protocol.oidc.OIDCConfigAttributes.USE_LOWER_CASE_IN_TOKEN_RESPONSE;
 
 import org.keycloak.authentication.authenticators.client.X509ClientAuthenticator;
-import org.keycloak.jose.jws.Algorithm;
 import org.keycloak.models.ClientModel;
-import org.keycloak.models.Constants;
 import org.keycloak.representations.idm.ClientRepresentation;
+import org.keycloak.services.util.DPoPUtil;
 import org.keycloak.utils.StringUtil;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -48,15 +45,12 @@ public class OIDCAdvancedConfigWrapper extends AbstractClientConfigWrapper {
         return new OIDCAdvancedConfigWrapper(null, clientRep);
     }
 
-
-    public Algorithm getUserInfoSignedResponseAlg() {
-        String alg = getAttribute(OIDCConfigAttributes.USER_INFO_RESPONSE_SIGNATURE_ALG);
-        return alg==null ? null : Enum.valueOf(Algorithm.class, alg);
+    public String getUserInfoSignedResponseAlg() {
+        return getAttribute(OIDCConfigAttributes.USER_INFO_RESPONSE_SIGNATURE_ALG);
     }
 
-    public void setUserInfoSignedResponseAlg(Algorithm alg) {
-        String algStr = alg==null ? null : alg.toString();
-        setAttribute(OIDCConfigAttributes.USER_INFO_RESPONSE_SIGNATURE_ALG, algStr);
+    public void setUserInfoSignedResponseAlg(String algorithm) {
+        setAttribute(OIDCConfigAttributes.USER_INFO_RESPONSE_SIGNATURE_ALG, algorithm);
     }
 
     public boolean isUserInfoSignatureRequired() {
@@ -83,14 +77,12 @@ public class OIDCAdvancedConfigWrapper extends AbstractClientConfigWrapper {
         return getUserInfoEncryptedResponseAlg() != null;
     }
 
-    public Algorithm getRequestObjectSignatureAlg() {
-        String alg = getAttribute(OIDCConfigAttributes.REQUEST_OBJECT_SIGNATURE_ALG);
-        return alg==null ? null : Enum.valueOf(Algorithm.class, alg);
+    public String getRequestObjectSignatureAlg() {
+        return getAttribute(OIDCConfigAttributes.REQUEST_OBJECT_SIGNATURE_ALG);
     }
 
-    public void setRequestObjectSignatureAlg(Algorithm alg) {
-        String algStr = alg==null ? null : alg.toString();
-        setAttribute(OIDCConfigAttributes.REQUEST_OBJECT_SIGNATURE_ALG, algStr);
+    public void setRequestObjectSignatureAlg(String algorithm) {
+        setAttribute(OIDCConfigAttributes.REQUEST_OBJECT_SIGNATURE_ALG, algorithm);
     }
 
     public void setRequestObjectEncryptionAlg(String algorithm) {
@@ -169,6 +161,26 @@ public class OIDCAdvancedConfigWrapper extends AbstractClientConfigWrapper {
     public void setExcludeSessionStateFromAuthResponse(boolean excludeSessionStateFromAuthResponse) {
         String val = String.valueOf(excludeSessionStateFromAuthResponse);
         setAttribute(OIDCConfigAttributes.EXCLUDE_SESSION_STATE_FROM_AUTH_RESPONSE, val);
+    }
+
+    public boolean isExcludeIssuerFromAuthResponse() {
+        String excludeIssuerFromAuthResponse = getAttribute(OIDCConfigAttributes.EXCLUDE_ISSUER_FROM_AUTH_RESPONSE);
+        return Boolean.parseBoolean(excludeIssuerFromAuthResponse);
+    }
+
+    public void setExcludeIssuerFromAuthResponse(boolean excludeIssuerFromAuthResponse) {
+        String val = String.valueOf(excludeIssuerFromAuthResponse);
+        setAttribute(OIDCConfigAttributes.EXCLUDE_ISSUER_FROM_AUTH_RESPONSE, val);
+    }
+
+    public boolean isUseDPoP() {
+        String mode = getAttribute(OIDCConfigAttributes.DPOP_BOUND_ACCESS_TOKENS);
+        return Boolean.parseBoolean(mode);
+    }
+
+    public void setUseDPoP(boolean useDPoP) {
+        String val = String.valueOf(useDPoP);
+        setAttribute(OIDCConfigAttributes.DPOP_BOUND_ACCESS_TOKENS, val);
     }
 
     // KEYCLOAK-6771 Certificate Bound Token
@@ -362,6 +374,29 @@ public class OIDCAdvancedConfigWrapper extends AbstractClientConfigWrapper {
 
     public void setTosUri(String tosUri) {
         setAttribute(ClientModel.TOS_URI, tosUri);
+    }
+
+    public List<String> getPostLogoutRedirectUris() {
+        List<String> postLogoutRedirectUris = getAttributeMultivalued(OIDCConfigAttributes.POST_LOGOUT_REDIRECT_URIS);
+        if(postLogoutRedirectUris == null || postLogoutRedirectUris.isEmpty() || postLogoutRedirectUris.get(0).equals("+")) {
+            if(clientModel != null) {
+                return new ArrayList(clientModel.getRedirectUris());
+            }
+            else if(clientRep != null) {
+                return clientRep.getRedirectUris();
+            }
+            return null;
+        }
+        else if(postLogoutRedirectUris.get(0).equals("-")) {
+            return new ArrayList<String>();
+        }
+        else {
+            return postLogoutRedirectUris;
+        }
+    }
+
+    public void setPostLogoutRedirectUris(List<String> postLogoutRedirectUris) {
+        setAttributeMultivalued(OIDCConfigAttributes.POST_LOGOUT_REDIRECT_URIS, postLogoutRedirectUris);
     }
 
 }

@@ -17,16 +17,7 @@
 
 package org.keycloak.testsuite.util;
 
-import static org.keycloak.protocol.oidc.OIDCLoginProtocol.LOGIN_HINT_PARAM;
-import static org.keycloak.protocol.oidc.grants.ciba.CibaGrantType.AUTH_REQ_ID;
-import static org.keycloak.protocol.oidc.grants.ciba.CibaGrantType.BINDING_MESSAGE;
-import static org.keycloak.protocol.oidc.grants.device.DeviceGrantType.oauth2DeviceAuthUrl;
-import static org.keycloak.testsuite.admin.Users.getPasswordOf;
-import static org.keycloak.testsuite.util.ServerURLs.getAuthServerContextRoot;
-import static org.keycloak.testsuite.util.ServerURLs.removeDefaultPorts;
-import static org.keycloak.testsuite.util.UIUtils.clickLink;
-import static org.keycloak.testsuite.util.WaitUtils.waitUntilElement;
-
+import com.google.common.base.Charsets;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.output.ByteArrayOutputStream;
 import org.apache.http.Header;
@@ -64,11 +55,11 @@ import org.keycloak.jose.jwk.JWKParser;
 import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.models.Constants;
 import org.keycloak.models.utils.KeycloakModelUtils;
+import org.keycloak.protocol.oidc.OIDCLoginProtocol;
+import org.keycloak.protocol.oidc.OIDCLoginProtocolService;
 import org.keycloak.protocol.oidc.grants.ciba.CibaGrantType;
 import org.keycloak.protocol.oidc.grants.ciba.channel.AuthenticationChannelResponse;
 import org.keycloak.protocol.oidc.par.endpoints.ParEndpoint;
-import org.keycloak.protocol.oidc.OIDCLoginProtocol;
-import org.keycloak.protocol.oidc.OIDCLoginProtocolService;
 import org.keycloak.protocol.oidc.representations.OIDCConfigurationRepresentation;
 import org.keycloak.protocol.oidc.utils.OIDCResponseType;
 import org.keycloak.representations.AccessToken;
@@ -88,8 +79,9 @@ import org.openqa.selenium.By;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 
-import com.google.common.base.Charsets;
-
+import jakarta.ws.rs.client.Entity;
+import jakarta.ws.rs.core.Form;
+import jakarta.ws.rs.core.UriBuilder;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
@@ -108,9 +100,15 @@ import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-import javax.ws.rs.client.Entity;
-import javax.ws.rs.core.Form;
-import javax.ws.rs.core.UriBuilder;
+import static org.keycloak.protocol.oidc.OIDCLoginProtocol.LOGIN_HINT_PARAM;
+import static org.keycloak.protocol.oidc.grants.ciba.CibaGrantType.AUTH_REQ_ID;
+import static org.keycloak.protocol.oidc.grants.ciba.CibaGrantType.BINDING_MESSAGE;
+import static org.keycloak.protocol.oidc.grants.device.DeviceGrantType.oauth2DeviceAuthUrl;
+import static org.keycloak.testsuite.admin.Users.getPasswordOf;
+import static org.keycloak.testsuite.util.ServerURLs.getAuthServerContextRoot;
+import static org.keycloak.testsuite.util.ServerURLs.removeDefaultPorts;
+import static org.keycloak.testsuite.util.UIUtils.clickLink;
+import static org.keycloak.testsuite.util.WaitUtils.waitUntilElement;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
@@ -196,6 +194,7 @@ public class OAuthClient {
     private String codeChallenge;
     private String codeChallengeMethod;
     private String origin;
+    private String dpopProof;
 
     private Map<String, String> customParameters;
 
@@ -205,6 +204,13 @@ public class OAuthClient {
 
     public class LogoutUrlBuilder {
         private final UriBuilder b = OIDCLoginProtocolService.logoutUrl(UriBuilder.fromUri(baseUrl));
+
+        public LogoutUrlBuilder clientId(String clientId) {
+            if (clientId != null) {
+                b.queryParam(OIDCLoginProtocol.CLIENT_ID_PARAM, clientId);
+            }
+            return this;
+        }
 
         public LogoutUrlBuilder idTokenHint(String idTokenHint) {
             if (idTokenHint != null) {
@@ -292,6 +298,7 @@ public class OAuthClient {
         codeChallenge = null;
         codeChallengeMethod = null;
         origin = null;
+        dpopProof = null;
         customParameters = null;
         openid = true;
     }
@@ -303,6 +310,13 @@ public class OAuthClient {
     public AuthorizationEndpointResponse doLogin(String username, String password) {
         openLoginForm();
         fillLoginForm(username, password);
+
+        return new AuthorizationEndpointResponse(this);
+    }
+
+    public AuthorizationEndpointResponse doSilentLogin() {
+        openLoginForm();
+        WaitUtils.waitForPageToLoad();
 
         return new AuthorizationEndpointResponse(this);
     }
@@ -502,6 +516,10 @@ public class OAuthClient {
             parameters.add(new BasicNameValuePair(OAuth2Constants.CODE_VERIFIER, codeVerifier));
         }
 
+        if (dpopProof != null) {
+            post.addHeader("DPoP", dpopProof);
+        }
+
         UrlEncodedFormEntity formEntity = new UrlEncodedFormEntity(parameters, Charsets.UTF_8);
         post.setEntity(formEntity);
 
@@ -616,8 +634,10 @@ public class OAuthClient {
             if (clientSessionHost != null) {
                 parameters.add(new BasicNameValuePair(AdapterConstants.CLIENT_SESSION_HOST, clientSessionHost));
             }
-            if (scope != null) {
-                parameters.add(new BasicNameValuePair(OAuth2Constants.SCOPE, scope));
+
+            String scopeParam = openid ? TokenUtil.attachOIDCScope(scope) : scope;
+            if (scopeParam != null && !scopeParam.isEmpty()) {
+                parameters.add(new BasicNameValuePair(OAuth2Constants.SCOPE, scopeParam));
             }
 
             if (userAgent != null) {
@@ -740,14 +760,15 @@ public class OAuthClient {
         try (CloseableHttpClient client = httpClient.get()) {
             HttpPost post = new HttpPost(getServiceAccountUrl());
 
-            String authorization = BasicAuthHelper.createHeader(clientId, clientSecret);
+            String authorization = BasicAuthHelper.RFC6749.createHeader(clientId, clientSecret);
             post.setHeader("Authorization", authorization);
 
             List<NameValuePair> parameters = new LinkedList<>();
             parameters.add(new BasicNameValuePair(OAuth2Constants.GRANT_TYPE, OAuth2Constants.CLIENT_CREDENTIALS));
 
-            if (scope != null) {
-                parameters.add(new BasicNameValuePair(OAuth2Constants.SCOPE, scope));
+            String scopeParam = openid ? TokenUtil.attachOIDCScope(scope) : scope;
+            if (scopeParam != null && !scopeParam.isEmpty()) {
+                parameters.add(new BasicNameValuePair(OAuth2Constants.SCOPE, scopeParam));
             }
 
             UrlEncodedFormEntity formEntity;
@@ -759,7 +780,7 @@ public class OAuthClient {
             post.setEntity(formEntity);
 
             return new AccessTokenResponse(client.execute(post));
-        } 
+        }
     }
 
     public AuthenticationRequestAcknowledgement doBackchannelAuthenticationRequest(String clientId, String clientSecret, String userid, String bindingMessage, String acrValues) throws Exception {
@@ -996,6 +1017,10 @@ public class OAuthClient {
             parameters.add(new BasicNameValuePair(AdapterConstants.CLIENT_SESSION_HOST, clientSessionHost));
         }
 
+        if (dpopProof != null) {
+            post.addHeader("DPoP", dpopProof);
+        }
+
         UrlEncodedFormEntity formEntity;
         try {
             formEntity = new UrlEncodedFormEntity(parameters, "UTF-8");
@@ -1027,8 +1052,9 @@ public class OAuthClient {
                 post.addHeader("Origin", origin);
             }
 
-            if (scope != null) {
-                parameters.add(new BasicNameValuePair(OAuth2Constants.SCOPE, scope));
+            String scopeParam = openid ? TokenUtil.attachOIDCScope(scope) : scope;
+            if (scopeParam != null && !scopeParam.isEmpty()) {
+                parameters.add(new BasicNameValuePair(OAuth2Constants.SCOPE, scopeParam));
             }
             if (nonce != null) {
                 parameters.add(new BasicNameValuePair(OIDCLoginProtocol.NONCE_PARAM, scope));
@@ -1113,15 +1139,41 @@ public class OAuthClient {
         }
     }
 
+    public UserInfoResponse doUserInfoRequestByGet(String accessToken) throws Exception {
+        try (CloseableHttpClient client = HttpClientBuilder.create().build()) {
+            HttpGet get = new HttpGet(getUserInfoUrl());
+            get.setHeader("Authorization", "Bearer " + accessToken);
+            if (dpopProof != null) {
+                get.addHeader("DPoP", dpopProof);
+            }
+            return new UserInfoResponse(client.execute(get));
+        } catch (IOException ex) {
+            throw new RuntimeException(ex);
+        }
+    }
+
     public ParResponse doPushedAuthorizationRequest(String clientId, String clientSecret) throws IOException {
-        return doPushedAuthorizationRequest(clientId, clientSecret, (CloseableHttpResponse c)->{});
+        return doPushedAuthorizationRequest(clientId, clientSecret, (CloseableHttpResponse c)->{}, null);
+    }
+
+    public ParResponse doPushedAuthorizationRequest(String clientId, String clientSecret, String signedJwt) throws IOException {
+        return doPushedAuthorizationRequest(clientId, clientSecret, (CloseableHttpResponse c)->{}, signedJwt);
     }
 
     public ParResponse doPushedAuthorizationRequest(String clientId, String clientSecret, Consumer<CloseableHttpResponse> c) throws IOException {
-        try (CloseableHttpClient client = HttpClientBuilder.create().build()) {
+        return doPushedAuthorizationRequest(clientId, clientSecret, c, null);
+    }
+
+    public ParResponse doPushedAuthorizationRequest(String clientId, String clientSecret, Consumer<CloseableHttpResponse> c, String signedJwt) throws IOException {
+        try (CloseableHttpClient client = httpClient.get()) {
             HttpPost post = new HttpPost(getParEndpointUrl());
 
             List<NameValuePair> parameters = new LinkedList<>();
+
+            if (signedJwt != null) {
+                parameters.add(new BasicNameValuePair(OAuth2Constants.CLIENT_ASSERTION_TYPE, OAuth2Constants.CLIENT_ASSERTION_TYPE_JWT));
+                parameters.add(new BasicNameValuePair(OAuth2Constants.CLIENT_ASSERTION, signedJwt));
+            }
 
             if (origin != null) {
                 post.addHeader("Origin", origin);
@@ -1135,6 +1187,8 @@ public class OAuthClient {
             if (clientId != null && clientSecret != null) {
                 String authorization = BasicAuthHelper.createHeader(clientId, clientSecret);
                 post.setHeader("Authorization", authorization);
+            }
+            if (clientId != null) {
                 parameters.add(new BasicNameValuePair(OAuth2Constants.CLIENT_ID, clientId));
             }
             if (redirectUri != null) {
@@ -1402,10 +1456,10 @@ public class OAuthClient {
     public String getRedirectUri() {
         return redirectUri;
     }
-    
+
     /**
      * Application-initiated action.
-     * 
+     *
      * @return The action name.
      */
     public String getKcAction() {
@@ -1513,7 +1567,7 @@ public class OAuthClient {
                 .param(OAuth2Constants.CLIENT_ID, clientId)
                 .param(OAuth2Constants.REDIRECT_URI, redirectUri)
                 .param(OAuth2Constants.STATE, this.state.getState());
-        
+
         return Entity.form(form);
     }
 
@@ -1628,7 +1682,7 @@ public class OAuthClient {
         this.initiatingIDP = initiatingIDP;
         return this;
     }
-    
+
     public OAuthClient kcAction(String kcAction) {
         this.kcAction = kcAction;
         return this;
@@ -1743,6 +1797,11 @@ public class OAuthClient {
         return this;
     }
 
+    public OAuthClient dpopProof(String dpopProof) {
+        this.dpopProof = dpopProof;
+        return this;
+    }
+
     public OAuthClient addCustomParameter(String key, String value) {
         if (customParameters == null) {
             customParameters = new HashMap<>();
@@ -1782,6 +1841,8 @@ public class OAuthClient {
         // Just during FAPI JARM response mode JWT
         private String response;
 
+        private String issuer;
+
         public AuthorizationEndpointResponse(OAuthClient client) {
             boolean fragment;
             if (client.responseMode == null || "jwt".equals(client.responseMode)) {
@@ -1814,6 +1875,7 @@ public class OAuthClient {
             tokenType = params.get(OAuth2Constants.TOKEN_TYPE);
             expiresIn = params.get(OAuth2Constants.EXPIRES_IN);
             response = params.get(OAuth2Constants.RESPONSE);
+            issuer = params.get(OAuth2Constants.ISSUER);
         }
 
         public boolean isRedirected() {
@@ -1859,6 +1921,9 @@ public class OAuthClient {
         public String getResponse() {
             return response;
         }
+        public String getIssuer() {
+            return issuer;
+        }
     }
 
     public static class AuthenticationRequestAcknowledgement {
@@ -1884,7 +1949,7 @@ public class OAuthClient {
 
                 Header[] contentTypeHeaders = response.getHeaders("Content-Type");
                 String contentType = (contentTypeHeaders != null && contentTypeHeaders.length > 0) ? contentTypeHeaders[0].getValue() : null;
-                if (!"application/json".equals(contentType)) {
+                if (contentType == null || !contentType.startsWith("application/json")) {
                     Assert.fail("Invalid content type. Status: " + statusCode + ", contentType: " + contentType);
                 }
 
@@ -2078,7 +2143,7 @@ public class OAuthClient {
         }
     }
 
-    private KeyWrapper getRealmPublicKey(String realm, String algoritm, String kid) {
+    private KeyWrapper getRealmPublicKey(String realm, String algorithm, String kid) {
         boolean loadedKeysFromServer = false;
         JSONWebKeySet jsonWebKeySet = publicKeys.get(realm);
         if (jsonWebKeySet == null) {
@@ -2087,17 +2152,17 @@ public class OAuthClient {
             loadedKeysFromServer = true;
         }
 
-        KeyWrapper key = findKey(jsonWebKeySet, algoritm, kid);
+        KeyWrapper key = findKey(jsonWebKeySet, algorithm, kid);
 
         if (key == null && !loadedKeysFromServer) {
             jsonWebKeySet = getRealmKeys(realm);
             publicKeys.put(realm, jsonWebKeySet);
 
-            key = findKey(jsonWebKeySet, algoritm, kid);
+            key = findKey(jsonWebKeySet, algorithm, kid);
         }
 
         if (key == null) {
-            throw new RuntimeException("Public key for realm:" + realm + ", algorithm: " + algoritm + " not found");
+            throw new RuntimeException("Public key for realm:" + realm + ", algorithm: " + algorithm + " not found");
         }
 
         return key;
@@ -2112,9 +2177,9 @@ public class OAuthClient {
         }
     }
 
-    private KeyWrapper findKey(JSONWebKeySet jsonWebKeySet, String algoritm, String kid) {
+    private KeyWrapper findKey(JSONWebKeySet jsonWebKeySet, String algorithm, String kid) {
         for (JWK k : jsonWebKeySet.getKeys()) {
-            if (k.getKeyId().equals(kid) && k.getAlgorithm().equals(algoritm)) {
+            if (k.getKeyId().equals(kid) && k.getAlgorithm().equals(algorithm)) {
                 PublicKey publicKey = JWKParser.create(k).toPublicKey();
 
                 KeyWrapper key = new KeyWrapper();
@@ -2149,7 +2214,7 @@ public class OAuthClient {
         String id = "social-" + alias;
         return DroneUtils.getCurrentDriver().findElement(By.id(id));
     }
-    
+
     private interface StateParamProvider {
 
         String getState();
@@ -2236,6 +2301,44 @@ public class OAuthClient {
 
         public int getInterval() {
             return interval;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
+        }
+
+        public Map<String, String> getHeaders() {
+            return headers;
+        }
+    }
+
+    public static class UserInfoResponse {
+        private int statusCode;
+
+        private UserInfo userInfo;
+
+        private Map<String, String> headers;
+
+        public UserInfoResponse(CloseableHttpResponse response) throws Exception {
+            try {
+                statusCode = response.getStatusLine().getStatusCode();
+
+                headers = new HashMap<>();
+
+                for (Header h : response.getAllHeaders()) {
+                    headers.put(h.getName(), h.getValue());
+                }
+
+                if (statusCode == 200) {
+                    userInfo = JsonSerialization.readValue(response.getEntity().getContent(), UserInfo.class);
+                }
+            } finally {
+                response.close();
+            }
+        }
+
+        public UserInfo getUserInfo() {
+            return userInfo;
         }
 
         public int getStatusCode() {

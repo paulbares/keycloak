@@ -86,13 +86,13 @@ public class MapClientEntityClonerTest {
         newInstance.setId("my-id");
         newInstance.setClientId("a-client-id");
         newInstance.setAttribute("attr", Arrays.asList("aa", "bb", "cc"));
-        MapProtocolMapperEntity pmm = new MapProtocolMapperEntityImpl();
+        MapProtocolMapperEntity pmm = DeepCloner.DUMB_CLONER.newInstance(MapProtocolMapperEntity.class);
         pmm.setId("pmm-id");
         Map<String, String> config = new HashMap<>();
         config.put("key1", "value1");
         config.put("key2", "value2");
         pmm.setConfig(config);
-        newInstance.setProtocolMapper("pmm-id", pmm);
+        newInstance.addProtocolMapper(pmm);
         newInstance.setAttribute("attr", Arrays.asList("aa", "bb", "cc"));
 
         MapClientEntity clonedInstance = CLONER.newInstance(MapClientEntity.class);
@@ -108,10 +108,12 @@ public class MapClientEntityClonerTest {
         assertThat(clonedInstance.getAttributes().get("attr"), not(sameInstance(newInstance.getAttributes().get("attr"))));
 
         assertThat(clonedInstance.getProtocolMappers(), not(sameInstance(newInstance.getProtocolMappers())));
-        assertThat(clonedInstance.getProtocolMapper("pmm-id"), not(sameInstance(newInstance.getProtocolMapper("pmm-id"))));
-        assertThat(clonedInstance.getProtocolMapper("pmm-id"), equalTo(newInstance.getProtocolMapper("pmm-id")));
-        assertThat(clonedInstance.getProtocolMapper("pmm-id").getConfig(), not(sameInstance(newInstance.getProtocolMapper("pmm-id").getConfig())));
-        assertThat(clonedInstance.getProtocolMapper("pmm-id").getConfig(), equalTo(newInstance.getProtocolMapper("pmm-id").getConfig()));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").isPresent(), is(true));
+        assertThat(newInstance.getProtocolMapper("pmm-id").isPresent(), is(true));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").get(), not(sameInstance(newInstance.getProtocolMapper("pmm-id").get())));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").get(), equalTo(newInstance.getProtocolMapper("pmm-id").get()));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").get().getConfig(), not(sameInstance(newInstance.getProtocolMapper("pmm-id").get().getConfig())));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").get().getConfig(), equalTo(newInstance.getProtocolMapper("pmm-id").get().getConfig()));
 
         assertThat(clonedInstance.getAuthenticationFlowBindingOverrides(), nullValue());
         assertThat(clonedInstance.getRegistrationToken(), nullValue());
@@ -119,18 +121,18 @@ public class MapClientEntityClonerTest {
 
     @Test
     public void testCloneToExistingInstanceDumb() {
-        MapClientEntity newInstance = new MapClientEntityImpl();
+        MapClientEntity newInstance = DeepCloner.DUMB_CLONER.newInstance(MapClientEntity.class);
         newInstance.setId("my-id");
         newInstance.setClientId("a-client-id");
         newInstance.setAttribute("attr", Arrays.asList("aa", "bb", "cc"));
-        MapProtocolMapperEntity pmm = new MapProtocolMapperEntityImpl();
+        MapProtocolMapperEntity pmm = DeepCloner.DUMB_CLONER.newInstance(MapProtocolMapperEntity.class);
         pmm.setId("pmm-id");
         Map<String, String> config = new HashMap<>();
         config.put("key1", "value1");
         config.put("key2", "value2");
         pmm.setConfig(config);
 
-        newInstance.setProtocolMapper("pmm-id", pmm);
+        newInstance.addProtocolMapper(pmm);
         newInstance.setAttribute("attr", Arrays.asList("aa", "bb", "cc"));
 
         MapClientEntity clonedInstance = CLONER.newInstance(MapClientEntity.class);
@@ -146,10 +148,12 @@ public class MapClientEntityClonerTest {
         assertThat(clonedInstance.getAttributes().get("attr"), not(sameInstance(newInstance.getAttributes().get("attr"))));
 
         assertThat(clonedInstance.getProtocolMappers(), not(sameInstance(newInstance.getProtocolMappers())));
-        assertThat(clonedInstance.getProtocolMapper("pmm-id"), not(sameInstance(newInstance.getProtocolMapper("pmm-id"))));
-        assertThat(clonedInstance.getProtocolMapper("pmm-id"), equalTo(newInstance.getProtocolMapper("pmm-id")));
-        assertThat(clonedInstance.getProtocolMapper("pmm-id").getConfig(), not(sameInstance(newInstance.getProtocolMapper("pmm-id").getConfig())));
-        assertThat(clonedInstance.getProtocolMapper("pmm-id").getConfig(), equalTo(newInstance.getProtocolMapper("pmm-id").getConfig()));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").isPresent(), is(true));
+        assertThat(newInstance.getProtocolMapper("pmm-id").isPresent(), is(true));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").get(), not(sameInstance(newInstance.getProtocolMapper("pmm-id").get())));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").get(), equalTo(newInstance.getProtocolMapper("pmm-id").get()));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").get().getConfig(), not(sameInstance(newInstance.getProtocolMapper("pmm-id").get().getConfig())));
+        assertThat(clonedInstance.getProtocolMapper("pmm-id").get().getConfig(), equalTo(newInstance.getProtocolMapper("pmm-id").get().getConfig()));
 
         assertThat(clonedInstance.getAuthenticationFlowBindingOverrides(), nullValue());
         assertThat(clonedInstance.getRegistrationToken(), nullValue());

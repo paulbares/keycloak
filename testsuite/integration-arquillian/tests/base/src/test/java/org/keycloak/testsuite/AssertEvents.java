@@ -36,10 +36,12 @@ import org.keycloak.representations.idm.UserRepresentation;
 import org.keycloak.representations.idm.UserSessionRepresentation;
 import org.keycloak.util.TokenUtil;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.keycloak.testsuite.util.ServerURLs.getAuthServerContextRoot;
 
 /**
@@ -310,7 +312,23 @@ public class AssertEvents implements TestRule {
         }
 
         public ExpectedEvent detail(String key, String value) {
-            return detail(key, CoreMatchers.equalTo(value));
+            if (key.equals(Details.SCOPE)) {
+                // the scopes can be given in any order,
+                // therefore, use a matcher that takes a string and ignores the order of the scopes
+                return detail(key, new TypeSafeMatcher<String>() {
+                    @Override
+                    protected boolean matchesSafely(String actualValue) {
+                        return Matchers.containsInAnyOrder(value.split(" ")).matches(Arrays.asList(actualValue.split(" ")));
+                    }
+
+                    @Override
+                    public void describeTo(Description description) {
+                        description.appendText("contains scope in any order");
+                    }
+                });
+            } else {
+                return detail(key, CoreMatchers.equalTo(value));
+            }
         }
 
         public ExpectedEvent detail(String key, Matcher<? super String> matcher) {
@@ -346,13 +364,13 @@ public class AssertEvents implements TestRule {
             if (expected.getError() != null && ! expected.getType().endsWith("_ERROR")) {
                 expected.setType(expected.getType() + "_ERROR");
             }
-            Assert.assertThat("type", actual.getType(), is(expected.getType()));
-            Assert.assertThat("realm ID", actual.getRealmId(), is(realmId));
-            Assert.assertThat("client ID", actual.getClientId(), is(expected.getClientId()));
-            Assert.assertThat("error", actual.getError(), is(expected.getError()));
-            Assert.assertThat("ip address", actual.getIpAddress(), ipAddress);
-            Assert.assertThat("user ID", actual.getUserId(), is(userId));
-            Assert.assertThat("session ID", actual.getSessionId(), is(sessionId));
+            assertThat("type", actual.getType(), is(expected.getType()));
+            assertThat("realm ID", actual.getRealmId(), is(realmId));
+            assertThat("client ID", actual.getClientId(), is(expected.getClientId()));
+            assertThat("error", actual.getError(), is(expected.getError()));
+            assertThat("ip address", actual.getIpAddress(), ipAddress);
+            assertThat("user ID", actual.getUserId(), is(userId));
+            assertThat("session ID", actual.getSessionId(), is(sessionId));
 
             if (details == null || details.isEmpty()) {
 //                Assert.assertNull(actual.getDetails());
@@ -364,7 +382,7 @@ public class AssertEvents implements TestRule {
                         Assert.fail(d.getKey() + " missing");
                     }
 
-                    Assert.assertThat("Unexpected value for " + d.getKey(), actualValue, is(d.getValue()));
+                    assertThat("Unexpected value for " + d.getKey(), actualValue, is(d.getValue()));
                 }
                 /*
                 for (String k : actual.getDetails().keySet()) {

@@ -20,6 +20,7 @@ import org.keycloak.models.map.annotations.GenerateEntityImplementations;
 import org.keycloak.models.map.common.AbstractEntity;
 
 import org.keycloak.models.map.common.DeepCloner;
+import org.keycloak.models.map.common.ExpirableEntity;
 import org.keycloak.models.map.common.UpdatableEntity;
 
 import java.util.Collections;
@@ -34,7 +35,7 @@ import java.util.Set;
         inherits = "org.keycloak.models.map.authSession.MapRootAuthenticationSessionEntity.AbstractRootAuthenticationSessionEntity"
 )
 @DeepCloner.Root
-public interface MapRootAuthenticationSessionEntity extends AbstractEntity, UpdatableEntity {
+public interface MapRootAuthenticationSessionEntity extends AbstractEntity, UpdatableEntity, ExpirableEntity {
 
     public abstract class AbstractRootAuthenticationSessionEntity extends UpdatableEntity.Impl implements MapRootAuthenticationSessionEntity {
 
@@ -53,22 +54,6 @@ public interface MapRootAuthenticationSessionEntity extends AbstractEntity, Upda
         }
 
         @Override
-        public Optional<MapAuthenticationSessionEntity> getAuthenticationSession(String tabId) {
-            Set<MapAuthenticationSessionEntity> authenticationSessions = getAuthenticationSessions();
-            if (authenticationSessions == null || authenticationSessions.isEmpty()) return Optional.empty();
-
-            return authenticationSessions.stream().filter(as -> Objects.equals(as.getTabId(), tabId)).findFirst();
-        }
-
-        @Override
-        public Boolean removeAuthenticationSession(String tabId) {
-            Set<MapAuthenticationSessionEntity> authenticationSessions = getAuthenticationSessions();
-            boolean removed = authenticationSessions != null && authenticationSessions.removeIf(c -> Objects.equals(c.getTabId(), tabId));
-            this.updated |= removed;
-            return removed;
-        }
-
-        @Override
         public boolean isUpdated() {
             return this.updated ||
                     Optional.ofNullable(getAuthenticationSessions()).orElseGet(Collections::emptySet).stream().anyMatch(MapAuthenticationSessionEntity::isUpdated);
@@ -84,11 +69,20 @@ public interface MapRootAuthenticationSessionEntity extends AbstractEntity, Upda
     String getRealmId();
     void setRealmId(String realmId);
 
+    /**
+     * Returns a point in time (timestamp in milliseconds since The Epoch) when the root authentication session entity was created or
+     * updated during an authentication process.
+     *
+     * @return a timestamp in milliseconds since The Epoch or {@code null} when the time is unknown
+     */
     Long getTimestamp();
-    void setTimestamp(Long timestamp);
 
-    Long getExpiration();
-    void setExpiration(Long expiration);
+    /**
+     * Sets a point in the (timestamp in milliseconds since The Epoch) when the root authentication session entity was created or
+     * updated during an authentication process.
+     * @param timestamp a timestamp in milliseconds since The Epoch or {@code null} when the time is unknown
+     */
+    void setTimestamp(Long timestamp);
 
     Set<MapAuthenticationSessionEntity> getAuthenticationSessions();
     void setAuthenticationSessions(Set<MapAuthenticationSessionEntity> authenticationSessions);

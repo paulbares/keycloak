@@ -180,7 +180,7 @@ export class AccountPage extends React.Component<AccountPageProps, AccountPageSt
                         onSubmit={(event) => this.handleSubmit(event)}
                         className="personal-info-form"
                     >
-                        {!this.isRegistrationEmailAsUsername && (
+                        {!this.isRegistrationEmailAsUsername && fields.username != undefined && (
                             <FormGroup
                                 label={Msg.localize("username")}
                                 fieldId="user-name"
@@ -348,7 +348,7 @@ export class AccountPage extends React.Component<AccountPageProps, AccountPageSt
 
             {this.isDeleteAccountAllowed && (
                 <div id="delete-account" style={{ marginTop: "30px" }}>
-                    <ExpandableSection toggleText="Delete Account">
+                    <ExpandableSection toggleText={Msg.localize("deleteAccount")}>
                         <Grid hasGutter>
                             <GridItem span={6}>
                                 <p>

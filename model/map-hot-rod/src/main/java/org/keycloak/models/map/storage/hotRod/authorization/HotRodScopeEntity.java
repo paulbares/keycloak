@@ -17,50 +17,71 @@
 
 package org.keycloak.models.map.storage.hotRod.authorization;
 
+import org.infinispan.api.annotations.indexing.Basic;
+import org.infinispan.api.annotations.indexing.Indexed;
+import org.infinispan.api.annotations.indexing.Keyword;
+import org.infinispan.protostream.GeneratedSchema;
+import org.infinispan.protostream.annotations.AutoProtoSchemaBuilder;
 import org.infinispan.protostream.annotations.ProtoDoc;
 import org.infinispan.protostream.annotations.ProtoField;
 import org.keycloak.models.map.annotations.GenerateHotRodEntityImplementation;
+import org.keycloak.models.map.annotations.IgnoreForEntityImplementationGenerator;
 import org.keycloak.models.map.authorization.entity.MapScopeEntity;
 import org.keycloak.models.map.storage.hotRod.common.AbstractHotRodEntity;
+import org.keycloak.models.map.storage.hotRod.common.CommonPrimitivesProtoSchemaInitializer;
 import org.keycloak.models.map.storage.hotRod.common.UpdatableHotRodEntityDelegateImpl;
 
 import java.util.Objects;
 
 @GenerateHotRodEntityImplementation(
         implementInterface = "org.keycloak.models.map.authorization.entity.MapScopeEntity",
-        inherits = "org.keycloak.models.map.storage.hotRod.authorization.HotRodScopeEntity.AbstractHotRodScopeEntity"
+        inherits = "org.keycloak.models.map.storage.hotRod.authorization.HotRodScopeEntity.AbstractHotRodScopeEntity",
+        topLevelEntity = true,
+        modelClass = "org.keycloak.authorization.model.Scope",
+        cacheName = "authz"
 )
-@ProtoDoc("@Indexed")
+@Indexed
+@ProtoDoc("schema-version: " + HotRodScopeEntity.VERSION)
 public class HotRodScopeEntity extends AbstractHotRodEntity {
 
-    @ProtoDoc("@Field(index = Index.YES, store = Store.YES)")
-    @ProtoField(number = 1, required = true)
-    public int entityVersion = 1;
+    @IgnoreForEntityImplementationGenerator
+    public static final int VERSION = 1;
 
-    @ProtoDoc("@Field(index = Index.YES, store = Store.YES)")
+    @AutoProtoSchemaBuilder(
+            includeClasses = {
+                    HotRodScopeEntity.class
+            },
+            schemaFilePath = "proto/",
+            schemaPackageName = CommonPrimitivesProtoSchemaInitializer.HOT_ROD_ENTITY_PACKAGE)
+    public interface HotRodScopeEntitySchema extends GeneratedSchema {
+        HotRodScopeEntitySchema INSTANCE = new HotRodScopeEntitySchemaImpl();
+    }
+
+
+    @Basic(projectable = true)
+    @ProtoField(number = 1)
+    public Integer entityVersion = VERSION;
+
+    @Basic(projectable = true, sortable = true)
     @ProtoField(number = 2)
     public String id;
 
-    @ProtoDoc("@Field(index = Index.YES, store = Store.YES)")
+    @Basic(sortable = true)
     @ProtoField(number = 3)
     public String realmId;
 
+    @Keyword(sortable = true, normalizer = "lowercase")
     @ProtoField(number = 4)
-    @ProtoDoc("@Field(index = Index.YES, store = Store.YES)")
     public String name;
 
     @ProtoField(number = 5)
-    @ProtoDoc("@Field(index = Index.YES, store = Store.YES)")
-    public String nameLowercase;
-
-    @ProtoField(number = 6)
     public String displayName;
 
-    @ProtoField(number = 7)
+    @ProtoField(number = 6)
     public String iconUri;
 
-    @ProtoField(number = 8)
-    @ProtoDoc("@Field(index = Index.YES, store = Store.YES)")
+    @Basic(sortable = true)
+    @ProtoField(number = 7)
     public String resourceServerId;
 
     public static abstract class AbstractHotRodScopeEntity extends UpdatableHotRodEntityDelegateImpl<HotRodScopeEntity> implements MapScopeEntity {
@@ -83,7 +104,6 @@ public class HotRodScopeEntity extends AbstractHotRodEntity {
             HotRodScopeEntity entity = getHotRodEntity();
             entity.updated |= ! Objects.equals(entity.name, name);
             entity.name = name;
-            entity.nameLowercase = name == null ? null : name.toLowerCase();
         }
     }
 

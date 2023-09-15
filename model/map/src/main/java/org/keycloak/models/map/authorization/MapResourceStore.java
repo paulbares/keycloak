@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Red Hat, Inc. and/or its affiliates
+ * Copyright 2022 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,19 +24,17 @@ import org.keycloak.authorization.model.Resource.SearchableFields;
 import org.keycloak.authorization.model.ResourceServer;
 import org.keycloak.authorization.model.Scope;
 import org.keycloak.authorization.store.ResourceStore;
-import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ModelDuplicateException;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.map.authorization.adapter.MapResourceAdapter;
 import org.keycloak.models.map.authorization.entity.MapResourceEntity;
-import org.keycloak.models.map.authorization.entity.MapResourceEntityImpl;
-import org.keycloak.models.map.storage.MapKeycloakTransaction;
+import org.keycloak.models.map.common.DeepCloner;
+import org.keycloak.models.map.common.HasRealmId;
 import org.keycloak.models.map.storage.MapStorage;
 import org.keycloak.models.map.storage.ModelCriteriaBuilder.Operator;
 import org.keycloak.models.map.storage.criteria.DefaultModelCriteria;
 
 import java.util.Arrays;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -52,27 +50,29 @@ public class MapResourceStore implements ResourceStore {
 
     private static final Logger LOG = Logger.getLogger(MapResourceStore.class);
     private final AuthorizationProvider authorizationProvider;
-    final MapKeycloakTransaction<MapResourceEntity, Resource> tx;
-    private final KeycloakSession session;
+    final MapStorage<MapResourceEntity, Resource> store;
+    private final boolean storeHasRealmId;
 
-    public MapResourceStore(KeycloakSession session, MapStorage<MapResourceEntity, Resource> resourceStore, AuthorizationProvider provider) {
-        this.tx = resourceStore.createTransaction(session);
-        session.getTransactionManager().enlist(tx);
-        authorizationProvider = provider;
-        this.session = session;
+    public MapResourceStore(MapStorage<MapResourceEntity, Resource> resourceStore, AuthorizationProvider provider) {
+        this.authorizationProvider = provider;
+        this.store = resourceStore;
+        this.storeHasRealmId = store instanceof HasRealmId;
     }
 
-    private Function<MapResourceEntity, Resource> entityToAdapterFunc(final ResourceServer resourceServer) {
-        return origEntity ->  new MapResourceAdapter(resourceServer == null ? findResourceServer(origEntity) : resourceServer, origEntity, authorizationProvider.getStoreFactory());
-    }
-
-    private ResourceServer findResourceServer(MapResourceEntity entity) {
-        RealmModel realm = session.realms().getRealm(entity.getRealmId());
-        return authorizationProvider.getStoreFactory().getResourceServerStore().findById(realm, entity.getResourceServerId());
+    private Function<MapResourceEntity, Resource> entityToAdapterFunc(RealmModel realm, final ResourceServer resourceServer) {
+        return origEntity ->  new MapResourceAdapter(realm, resourceServer, origEntity, authorizationProvider.getStoreFactory());
     }
     
-    private DefaultModelCriteria<Resource> forResourceServer(ResourceServer resourceServer) {
-        DefaultModelCriteria<Resource> mcb = criteria();
+    private MapStorage<MapResourceEntity, Resource> storeWithRealm(RealmModel realm) {
+        if (storeHasRealmId) {
+            ((HasRealmId) store).setRealmId(realm == null ? null : realm.getId());
+        }
+        return store;
+    }
+
+    private DefaultModelCriteria<Resource> forRealmAndResourceServer(RealmModel realm, ResourceServer resourceServer) {
+        DefaultModelCriteria<Resource> mcb = DefaultModelCriteria.<Resource>criteria()
+                .compare(Resource.SearchableFields.REALM_ID, Operator.EQ, realm.getId());
 
         return resourceServer == null
                 ? mcb
@@ -84,97 +84,81 @@ public class MapResourceStore implements ResourceStore {
     public Resource create(ResourceServer resourceServer, String id, String name, String owner) {
         LOG.tracef("create(%s, %s, %s, %s)%s", id, name, resourceServer, owner, getShortStackTrace());
         // @UniqueConstraint(columnNames = {"NAME", "RESOURCE_SERVER_ID", "OWNER"})
-        DefaultModelCriteria<Resource> mcb = forResourceServer(resourceServer)
+        RealmModel realm = resourceServer.getRealm();
+
+        DefaultModelCriteria<Resource> mcb = forRealmAndResourceServer(realm, resourceServer)
                 .compare(SearchableFields.NAME, Operator.EQ, name)
                 .compare(SearchableFields.OWNER, Operator.EQ, owner);
 
-        if (tx.getCount(withCriteria(mcb)) > 0) {
+        if (storeWithRealm(realm).exists(withCriteria(mcb))) {
             throw new ModelDuplicateException("Resource with name '" + name + "' for " + resourceServer.getId() + " already exists for request owner " + owner);
         }
 
-        MapResourceEntity entity = new MapResourceEntityImpl();
+        MapResourceEntity entity = DeepCloner.DUMB_CLONER.newInstance(MapResourceEntity.class);
         entity.setId(id);
         entity.setName(name);
         entity.setResourceServerId(resourceServer.getId());
         entity.setOwner(owner);
-        entity.setRealmId(resourceServer.getRealm().getId());
+        entity.setRealmId(realm.getId());
 
-        entity = tx.create(entity);
+        entity = storeWithRealm(realm).create(entity);
 
-        return entity == null ? null : entityToAdapterFunc(resourceServer).apply(entity);
+        return entity == null ? null : entityToAdapterFunc(realm, resourceServer).apply(entity);
     }
 
     @Override
-    public void delete(String id) {
+    public void delete(RealmModel realm, String id) {
         LOG.tracef("delete(%s)%s", id, getShortStackTrace());
+        Resource resource = findById(realm, null, id);
+        if (resource == null) return;
 
-        tx.delete(id);
+        storeWithRealm(realm).delete(id);
     }
 
     @Override
-    public Resource findById(ResourceServer resourceServer, String id) {
+    public Resource findById(RealmModel realm, ResourceServer resourceServer, String id) {
         LOG.tracef("findById(%s, %s)%s", id, resourceServer, getShortStackTrace());
 
-        return tx.read(withCriteria(forResourceServer(resourceServer)
+        if (id == null) return null;
+
+        return storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer)
                 .compare(SearchableFields.ID, Operator.EQ, id)))
                 .findFirst()
-                .map(entityToAdapterFunc(resourceServer))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .orElse(null);
     }
 
     @Override
-    public void findByOwner(ResourceServer resourceServer, String ownerId, Consumer<Resource> consumer) {
-        findByOwnerFilter(ownerId, resourceServer, consumer, -1, -1);
-    }
+    public void findByOwner(RealmModel realm, ResourceServer resourceServer, String ownerId, Consumer<Resource> consumer) {
+        LOG.tracef("findByOwner(%s, %s, %s)%s", realm, resourceServer, resourceServer, ownerId, getShortStackTrace());
 
-    private void findByOwnerFilter(String ownerId, ResourceServer resourceServer, Consumer<Resource> consumer, int firstResult, int maxResult) {
-        LOG.tracef("findByOwnerFilter(%s, %s, %s, %d, %d)%s", ownerId, resourceServer, consumer, firstResult, maxResult, getShortStackTrace());
-
-        tx.read(withCriteria(forResourceServer(resourceServer).compare(SearchableFields.OWNER, Operator.EQ, ownerId))
-                .pagination(firstResult, maxResult, SearchableFields.ID)
-            ).map(entityToAdapterFunc(resourceServer))
-            .forEach(consumer);
-    }
-
-    @Override
-    public List<Resource> findByOwner(ResourceServer resourceServer, String ownerId, Integer firstResult, Integer maxResults) {
-        List<Resource> resourceList = new LinkedList<>();
-
-        findByOwnerFilter(ownerId, resourceServer, resourceList::add, firstResult, maxResults);
-
-        return resourceList;
-    }
-
-    @Override
-    public List<Resource> findByUri(ResourceServer resourceServer, String uri) {
-        LOG.tracef("findByUri(%s, %s)%s", uri, resourceServer, getShortStackTrace());
-
-        return tx.read(withCriteria(forResourceServer(resourceServer)
-                .compare(SearchableFields.URI, Operator.EQ, uri)))
-                .map(entityToAdapterFunc(resourceServer))
-                .collect(Collectors.toList());
+        storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer)
+                        .compare(SearchableFields.OWNER, Operator.EQ, ownerId)))
+                .map(entityToAdapterFunc(realm, resourceServer))
+                .forEach(consumer);
     }
 
     @Override
     public List<Resource> findByResourceServer(ResourceServer resourceServer) {
         LOG.tracef("findByResourceServer(%s)%s", resourceServer, getShortStackTrace());
+        RealmModel realm = resourceServer.getRealm();
 
-        return tx.read(withCriteria(forResourceServer(resourceServer)))
-                .map(entityToAdapterFunc(resourceServer))
+        return storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer)))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .collect(Collectors.toList());
     }
 
     @Override
-    public List<Resource> findByResourceServer(ResourceServer resourceServer, Map<Resource.FilterOption, String[]> attributes, Integer firstResult, Integer maxResults) {
-        LOG.tracef("findByResourceServer(%s, %s, %d, %d)%s", attributes, resourceServer, firstResult, maxResults, getShortStackTrace());
-        DefaultModelCriteria<Resource> mcb = forResourceServer(resourceServer).and(
+    public List<Resource> find(RealmModel realm, ResourceServer resourceServer, Map<Resource.FilterOption, String[]> attributes, Integer firstResult, Integer maxResults) {
+        LOG.tracef("findByResourceServer(%s, %s, %s, %d, %d)%s", realm, resourceServer, attributes, firstResult, maxResults, getShortStackTrace());
+        DefaultModelCriteria<Resource> mcb = forRealmAndResourceServer(realm, resourceServer).and(
                 attributes.entrySet().stream()
                         .map(this::filterEntryToDefaultModelCriteria)
                         .toArray(DefaultModelCriteria[]::new)
         );
 
-        return tx.read(withCriteria(mcb).pagination(firstResult, maxResults, SearchableFields.NAME))
-                .map(entityToAdapterFunc(resourceServer))
+        return storeWithRealm(realm).read(withCriteria(mcb).pagination(firstResult, maxResults, SearchableFields.NAME))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .collect(Collectors.toList());
     }
 
@@ -208,56 +192,63 @@ public class MapResourceStore implements ResourceStore {
     @Override
     public void findByScopes(ResourceServer resourceServer, Set<Scope> scopes, Consumer<Resource> consumer) {
         LOG.tracef("findByScope(%s, %s, %s)%s", scopes, resourceServer, consumer, getShortStackTrace());
+        RealmModel realm = resourceServer.getRealm();
 
-        tx.read(withCriteria(forResourceServer(resourceServer)
+        storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer)
                 .compare(SearchableFields.SCOPE_ID, Operator.IN, scopes.stream().map(Scope::getId))))
-                .map(entityToAdapterFunc(resourceServer))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .forEach(consumer);
     }
 
     @Override
     public Resource findByName(ResourceServer resourceServer, String name, String ownerId) {
         LOG.tracef("findByName(%s, %s, %s)%s", name, ownerId, resourceServer, getShortStackTrace());
-        return tx.read(withCriteria(forResourceServer(resourceServer)
+        RealmModel realm = resourceServer.getRealm();
+
+        return storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer)
                 .compare(SearchableFields.OWNER, Operator.EQ, ownerId)
                 .compare(SearchableFields.NAME, Operator.EQ, name)))
                 .findFirst()
-                .map(entityToAdapterFunc(resourceServer))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .orElse(null);
     }
 
     @Override
     public void findByType(ResourceServer resourceServer, String type, Consumer<Resource> consumer) {
         LOG.tracef("findByType(%s, %s, %s)%s", type, resourceServer, consumer, getShortStackTrace());
-        tx.read(withCriteria(forResourceServer(resourceServer)
+        RealmModel realm = authorizationProvider.getRealm();
+
+        storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer)
                 .compare(SearchableFields.TYPE, Operator.EQ, type)))
-            .map(entityToAdapterFunc(resourceServer))
+            .map(entityToAdapterFunc(realm, resourceServer))
             .forEach(consumer);
     }
 
     @Override
     public void findByType(ResourceServer resourceServer, String type, String owner, Consumer<Resource> consumer) {
         LOG.tracef("findByType(%s, %s, %s, %s)%s", type, owner, resourceServer, consumer, getShortStackTrace());
+        RealmModel realm = resourceServer.getRealm();
 
-        DefaultModelCriteria<Resource> mcb = forResourceServer(resourceServer)
+        DefaultModelCriteria<Resource> mcb = forRealmAndResourceServer(realm, resourceServer)
                 .compare(SearchableFields.TYPE, Operator.EQ, type);
 
         if (owner != null) {
             mcb = mcb.compare(SearchableFields.OWNER, Operator.EQ, owner);
         }
 
-        tx.read(withCriteria(mcb))
-                .map(entityToAdapterFunc(resourceServer))
+        storeWithRealm(realm).read(withCriteria(mcb))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .forEach(consumer);
     }
 
     @Override
     public void findByTypeInstance(ResourceServer resourceServer, String type, Consumer<Resource> consumer) {
         LOG.tracef("findByTypeInstance(%s, %s, %s)%s", type, resourceServer, consumer, getShortStackTrace());
-        tx.read(withCriteria(forResourceServer(resourceServer)
+        RealmModel realm = resourceServer.getRealm();
+        storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer)
                 .compare(SearchableFields.OWNER, Operator.NE, resourceServer.getClientId())
                 .compare(SearchableFields.TYPE, Operator.EQ, type)))
-                .map(entityToAdapterFunc(resourceServer))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .forEach(consumer);
     }
 
@@ -267,12 +258,12 @@ public class MapResourceStore implements ResourceStore {
         DefaultModelCriteria<Resource> mcb = criteria();
         mcb = mcb.compare(SearchableFields.REALM_ID, Operator.EQ, realm.getId());
 
-        tx.delete(withCriteria(mcb));
+        storeWithRealm(realm).delete(withCriteria(mcb));
     }
 
-    public void preRemove(ResourceServer resourceServer) {
-        LOG.tracef("preRemove(%s)%s", resourceServer, getShortStackTrace());
+    public void preRemove(RealmModel realm, ResourceServer resourceServer) {
+        LOG.tracef("preRemove(%s, %s)%s", realm, resourceServer, getShortStackTrace());
 
-        tx.delete(withCriteria(forResourceServer(resourceServer)));
+        storeWithRealm(realm).delete(withCriteria(forRealmAndResourceServer(resourceServer.getRealm(), resourceServer)));
     }
 }

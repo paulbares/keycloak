@@ -1,29 +1,24 @@
 <!--
-  ~ JBoss, Home of Professional Open Source.
-  ~ Copyright (c) 2011, Red Hat, Inc., and individual contributors
-  ~ as indicated by the @author tags. See the copyright.txt file in the
-  ~ distribution for a full listing of individual contributors.
+  ~ Copyright 2016 Red Hat, Inc. and/or its affiliates
+  ~ and other contributors as indicated by the @author tags.
   ~
-  ~ This is free software; you can redistribute it and/or modify it
-  ~ under the terms of the GNU Lesser General Public License as
-  ~ published by the Free Software Foundation; either version 2.1 of
-  ~ the License, or (at your option) any later version.
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
   ~
-  ~ This software is distributed in the hope that it will be useful,
-  ~ but WITHOUT ANY WARRANTY; without even the implied warranty of
-  ~ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-  ~ Lesser General Public License for more details.
+  ~ http://www.apache.org/licenses/LICENSE-2.0
   ~
-  ~ You should have received a copy of the GNU Lesser General Public
-  ~ License along with this software; if not, write to the Free
-  ~ Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
-  ~ 02110-1301 USA, or see the FSF site: http://www.fsf.org.
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
   -->
 <!DOCTYPE html>
 
 <html>
 <head>
-    <title>Welcome to ${productNameFull}</title>
+    <title>Welcome to ${productName}</title>
 
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
@@ -49,9 +44,10 @@
     <div class="col-sm-10 col-sm-offset-1 col-md-8 col-md-offset-2 col-lg-8 col-lg-offset-2">
       <div class="welcome-header">
         <img src="${resourcesPath}/logo.png" alt="${productName}" border="0" />
-        <h1>Welcome to <strong>${productNameFull}</strong></h1>
+        <h1>Welcome to <strong>${productName}</strong></h1>
       </div>
       <div class="row">
+        <#if adminConsoleEnabled>
         <div class="col-xs-12 col-sm-4">
           <div class="card-pf h-l">
             <#if successMessage?has_content>
@@ -93,14 +89,16 @@
                     <button id="create-button" type="submit" class="btn btn-primary">Create</button>
                 </form>
             </#if>
+
             <div class="welcome-primary-link">
               <h3><a href="${adminUrl}"><img src="welcome-content/user.png">Administration Console <i class="fa fa-angle-right link" aria-hidden="true"></i></a></h3>
               <div class="description">
-                Centrally manage all aspects of the ${productNameFull} server
+                Centrally manage all aspects of the ${productName} server
               </div>
             </div>
           </div>
         </div>
+        </#if> <#-- adminConsoleEnabled -->
         <div class="col-xs-12 col-sm-4">
           <div class="card-pf h-l">
             <h3><a href="${properties.documentationUrl}"><img class="doc-img" src="welcome-content/admin-console.png">Documentation <i class="fa fa-angle-right link" aria-hidden="true"></i></a></h3>
@@ -120,7 +118,7 @@
             <h3><a href="https://groups.google.com/forum/#!forum/keycloak-user"><img src="welcome-content/mail.png">Mailing List <i class="fa fa-angle-right link" aria-hidden="true"></i></a></h3>
           </div>
           <div class="card-pf h-m">
-            <h3><a href="https://issues.jboss.org/browse/KEYCLOAK"><img src="welcome-content/bug.png">Report an issue <i class="fa fa-angle-right link" aria-hidden="true"></i></a></h3>
+            <h3><a href="https://github.com/keycloak/keycloak/issues"><img src="welcome-content/bug.png">Report an issue <i class="fa fa-angle-right link" aria-hidden="true"></i></a></h3>
           </div>
         </#if>
         </div>

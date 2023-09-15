@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2022 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +35,7 @@ import org.keycloak.models.ClientModel;
 import org.keycloak.models.GroupModel;
 import org.keycloak.models.ImpersonationConstants;
 import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.representations.idm.authorization.Permission;
 import org.keycloak.services.ForbiddenException;
@@ -82,7 +83,7 @@ class UserPermissions implements UserPermissionEvaluator, UserPermissionManageme
         this.session = session;
         this.authz = authz;
         this.root = root;
-        if (Profile.isFeatureEnabled(Profile.Feature.AUTHORIZATION)) {
+        if (authz != null) {
             policyStore = authz.getStoreFactory().getPolicyStore();
             resourceStore = authz.getStoreFactory().getResourceStore();
         } else {
@@ -93,9 +94,9 @@ class UserPermissions implements UserPermissionEvaluator, UserPermissionManageme
 
 
     private void initialize() {
-        root.initializeRealmResourceServer();
+        ResourceServer server = root.initializeRealmResourceServer();
+        if (server == null) return;
         root.initializeRealmDefaultScopes();
-        ResourceServer server = root.realmResourceServer();
         Scope manageScope = root.realmManageScope();
         Scope viewScope = root.realmViewScope();
         Scope mapRolesScope = root.initializeRealmScope(MAP_ROLES_SCOPE);
@@ -143,6 +144,7 @@ class UserPermissions implements UserPermissionEvaluator, UserPermissionManageme
 
     @Override
     public Map<String, String> getPermissions() {
+        if (authz == null) return null;
         initialize();
         Map<String, String> scopes = new LinkedHashMap<>();
         scopes.put(AdminPermissionManagement.VIEW_SCOPE, viewPermission().getId());
@@ -526,39 +528,42 @@ class UserPermissions implements UserPermissionEvaluator, UserPermissionManageme
     private void deletePermissionSetup() {
         ResourceServer server = root.realmResourceServer();
         if (server == null) return;
+
+        RealmModel realm = server.getRealm();
+
         Policy policy = managePermission();
         if (policy != null) {
-            policyStore.delete(policy.getId());
+            policyStore.delete(realm, policy.getId());
 
         }
         policy = viewPermission();
         if (policy != null) {
-            policyStore.delete(policy.getId());
+            policyStore.delete(realm, policy.getId());
 
         }
         policy = mapRolesPermission();
         if (policy != null) {
-            policyStore.delete(policy.getId());
+            policyStore.delete(realm, policy.getId());
 
         }
         policy = manageGroupMembershipPermission();
         if (policy != null) {
-            policyStore.delete(policy.getId());
+            policyStore.delete(realm, policy.getId());
 
         }
         policy = adminImpersonatingPermission();
         if (policy != null) {
-            policyStore.delete(policy.getId());
+            policyStore.delete(realm, policy.getId());
 
         }
         policy = userImpersonatedPermission();
         if (policy != null) {
-            policyStore.delete(policy.getId());
+            policyStore.delete(realm, policy.getId());
 
         }
         Resource usersResource = resourceStore.findByName(server, USERS_RESOURCE);
         if (usersResource != null) {
-            resourceStore.delete(usersResource.getId());
+            resourceStore.delete(realm, usersResource.getId());
         }
     }
 
@@ -582,10 +587,12 @@ class UserPermissions implements UserPermissionEvaluator, UserPermissionManageme
     }
 
     private boolean canManageByGroup(UserModel user) {
+        if (authz == null) return false;
         return evaluateHierarchy(user, (group) -> root.groups().canManageMembers(group));
 
     }
     private boolean canViewByGroup(UserModel user) {
+        if (authz == null) return false;
         return evaluateHierarchy(user, (group) -> root.groups().getGroupsWithViewPermission(group));
     }
 

@@ -38,6 +38,7 @@ import org.jboss.arquillian.container.spi.client.protocol.metadata.HTTPContext;
 import org.jboss.arquillian.container.spi.client.protocol.metadata.ProtocolMetaData;
 import org.jboss.arquillian.container.spi.client.protocol.metadata.Servlet;
 import org.jboss.logging.Logger;
+import org.jboss.resteasy.core.ResteasyDeploymentImpl;
 import org.jboss.resteasy.plugins.server.servlet.ResteasyContextParameters;
 import org.jboss.resteasy.plugins.server.undertow.UndertowJaxrsServer;
 import org.jboss.resteasy.spi.ResteasyDeployment;
@@ -59,14 +60,14 @@ import org.keycloak.testsuite.utils.undertow.UndertowWarClassLoader;
 import org.keycloak.util.JsonSerialization;
 
 import io.undertow.servlet.api.InstanceHandle;
-import javax.servlet.DispatcherType;
-import javax.servlet.ServletException;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.ServletException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import javax.servlet.Filter;
+import jakarta.servlet.Filter;
 import org.xnio.Options;
 import org.xnio.SslClientAuthMode;
 
@@ -81,19 +82,17 @@ public class KeycloakOnUndertow implements DeployableContainer<KeycloakOnUnderto
     Map<String, String> deployedArchivesToContextPath = new ConcurrentHashMap<>();
 
     private DeploymentInfo createAuthServerDeploymentInfo() {
-        ResteasyDeployment deployment = new ResteasyDeployment();
+        ResteasyDeployment deployment = new ResteasyDeploymentImpl();
         deployment.setApplicationClass(KeycloakApplication.class.getName());
 
         // RESTEASY-2034
         deployment.setProperty(ResteasyContextParameters.RESTEASY_DISABLE_HTML_SANITIZER, true);
 
-        // Prevent double gzip encoding of resources
-        deployment.getDisabledProviderClasses().add("org.jboss.resteasy.plugins.interceptors.encoding.GZIPEncodingInterceptor");
-
         DeploymentInfo di = undertow.undertowDeployment(deployment);
         di.setClassLoader(getClass().getClassLoader());
         di.setContextPath("/auth");
         di.setDeploymentName("Keycloak");
+        di.setDefaultEncoding("UTF-8");
         if (configuration.getKeycloakConfigPropertyOverridesMap() != null) {
             try {
                 di.addInitParameter(JsonConfigProviderFactory.SERVER_CONTEXT_CONFIG_PROPERTY_OVERRIDES,
@@ -233,15 +232,11 @@ public class KeycloakOnUndertow implements DeployableContainer<KeycloakOnUnderto
     }
 
     protected void setupDevConfig() {
-        KeycloakSession session = sessionFactory.create();
-        try {
+        try (KeycloakSession session = sessionFactory.create()) {
             session.getTransactionManager().begin();
             if (new ApplianceBootstrap(session).isNoMasterUser()) {
                 new ApplianceBootstrap(session).createMasterRealmUser("admin", "admin");
             }
-            session.getTransactionManager().commit();
-        } finally {
-            session.close();
         }
     }
 

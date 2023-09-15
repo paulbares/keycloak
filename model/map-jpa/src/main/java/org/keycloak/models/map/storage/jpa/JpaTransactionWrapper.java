@@ -16,11 +16,10 @@
  */
 package org.keycloak.models.map.storage.jpa;
 
-import javax.persistence.EntityTransaction;
-import javax.persistence.PersistenceException;
+import jakarta.persistence.EntityTransaction;
+import jakarta.persistence.PersistenceException;
 
 import org.jboss.logging.Logger;
-import org.keycloak.connections.jpa.PersistenceExceptionConverter;
 import org.keycloak.models.KeycloakTransaction;
 
 /**

@@ -17,8 +17,9 @@
 
 package org.keycloak.testsuite.rest;
 
+import org.infinispan.client.hotrod.RemoteCache;
 import org.jboss.resteasy.annotations.cache.NoCache;
-import org.jboss.resteasy.spi.HttpRequest;
+import org.keycloak.http.HttpRequest;
 import org.keycloak.Config;
 import org.keycloak.common.Profile;
 import org.keycloak.common.util.HtmlUtils;
@@ -45,6 +46,11 @@ import org.keycloak.models.UserCredentialModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.UserProvider;
 import org.keycloak.models.UserSessionModel;
+import org.keycloak.models.UserSessionSpi;
+import org.keycloak.models.map.common.AbstractMapProviderFactory;
+import org.keycloak.models.map.storage.hotRod.connections.DefaultHotRodConnectionProviderFactory;
+import org.keycloak.models.map.storage.hotRod.connections.HotRodConnectionProvider;
+import org.keycloak.models.map.userSession.MapUserSessionProviderFactory;
 import org.keycloak.models.sessions.infinispan.changes.sessions.CrossDCLastSessionRefreshStoreFactory;
 import org.keycloak.models.utils.ModelToRepresentation;
 import org.keycloak.models.utils.ResetTimeOffsetEvent;
@@ -63,6 +69,7 @@ import org.keycloak.services.resource.RealmResourceProvider;
 import org.keycloak.services.scheduled.ClearExpiredUserSessions;
 import org.keycloak.services.util.CookieHelper;
 import org.keycloak.storage.UserStorageProvider;
+import org.keycloak.storage.datastore.PeriodicEventInvalidation;
 import org.keycloak.testsuite.components.TestProvider;
 import org.keycloak.testsuite.components.TestProviderFactory;
 import org.keycloak.testsuite.components.amphibian.TestAmphibianProvider;
@@ -81,22 +88,23 @@ import org.keycloak.testsuite.runonserver.RunOnServer;
 import org.keycloak.testsuite.runonserver.SerializationUtil;
 import org.keycloak.testsuite.util.FeatureDeployerUtil;
 import org.keycloak.timer.TimerProvider;
+import org.keycloak.truststore.FileTruststoreProviderFactory;
+import org.keycloak.truststore.TruststoreProvider;
 import org.keycloak.util.JsonSerialization;
 import org.keycloak.utils.MediaType;
 
-import javax.ws.rs.BadRequestException;
-import javax.ws.rs.Consumes;
-import javax.ws.rs.GET;
-import javax.ws.rs.NotFoundException;
-import javax.ws.rs.POST;
-import javax.ws.rs.PUT;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
-import javax.ws.rs.QueryParam;
-import javax.ws.rs.core.Context;
-import javax.ws.rs.core.Cookie;
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.NotFoundException;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.Cookie;
+import jakarta.ws.rs.core.Response;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -110,9 +118,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.UUID;
+import org.keycloak.services.ErrorResponse;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
@@ -122,17 +132,20 @@ public class TestingResourceProvider implements RealmResourceProvider {
     private final KeycloakSession session;
     private final Map<String, TimerProvider.TimerTaskContext> suspendedTimerTasks;
 
-    @Context
-    private HttpRequest request;
+    private final HttpRequest request;
+
+    private final TestingResourceProviderFactory factory;
 
     @Override
     public Object getResource() {
         return this;
     }
 
-    public TestingResourceProvider(KeycloakSession session, Map<String, TimerProvider.TimerTaskContext> suspendedTimerTasks) {
+    public TestingResourceProvider(KeycloakSession session, TestingResourceProviderFactory factory, Map<String, TimerProvider.TimerTaskContext> suspendedTimerTasks) {
         this.session = session;
+        this.factory = factory;
         this.suspendedTimerTasks = suspendedTimerTasks;
+        this.request = session.getContext().getHttpRequest();
     }
 
     @POST
@@ -199,7 +212,7 @@ public class TestingResourceProvider implements RealmResourceProvider {
     @Path("/revert-testing-infinispan-time-service")
     @Produces(MediaType.APPLICATION_JSON)
     public Response revertTestingInfinispanTimeService() {
-        InfinispanTestUtil.revertTimeService();
+        InfinispanTestUtil.revertTimeService(session);
         return Response.noContent().build();
     }
 
@@ -235,6 +248,19 @@ public class TestingResourceProvider implements RealmResourceProvider {
     @Produces(MediaType.APPLICATION_JSON)
     public Map<String, String> setTimeOffset(Map<String, String> time) {
         int offset = Integer.parseInt(time.get("offset"));
+
+        // move time on Hot Rod server if present
+        // determine usage of Infinispan based on user sessions config
+        String userSessionProvider = Config.scope(UserSessionSpi.NAME, MapUserSessionProviderFactory.PROVIDER_ID, AbstractMapProviderFactory.CONFIG_STORAGE).get("provider");
+        if (Profile.isFeatureEnabled(Profile.Feature.MAP_STORAGE) && "hotrod".equals(userSessionProvider)) {
+            RemoteCache<Object, Object> scriptCache = session.getProvider(HotRodConnectionProvider.class).getRemoteCache(DefaultHotRodConnectionProviderFactory.SCRIPT_CACHE);
+            if (scriptCache != null) {
+                Map<String, Object> param = new HashMap<>();
+                param.put("timeService", offset);
+                scriptCache.execute("InfinispanTimeServiceTask", param);
+            }
+        }
+
         Time.setOffset(offset);
 
         // Time offset was restarted
@@ -286,20 +312,15 @@ public class TestingResourceProvider implements RealmResourceProvider {
     }
 
     @GET
-    @Path("/clear-event-store")
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response clearEventStore() {
-        EventStoreProvider eventStore = session.getProvider(EventStoreProvider.class);
-        eventStore.clear();
-        return Response.noContent().build();
-    }
-
-    @GET
     @Path("/clear-event-store-for-realm")
     @Produces(MediaType.APPLICATION_JSON)
     public Response clearEventStore(@QueryParam("realmId") String realmId) {
         EventStoreProvider eventStore = session.getProvider(EventStoreProvider.class);
-        eventStore.clear(realmId);
+        RealmModel realm = session.realms().getRealm(realmId);
+
+        if (realm == null) throw ErrorResponse.error("Realm not found", Response.Status.NOT_FOUND);
+
+        eventStore.clear(realm);
         return Response.noContent().build();
     }
 
@@ -309,8 +330,10 @@ public class TestingResourceProvider implements RealmResourceProvider {
     public Response clearExpiredEvents() {
         EventStoreProvider eventStore = session.getProvider(EventStoreProvider.class);
         eventStore.clearExpiredEvents();
+        session.invalidate(PeriodicEventInvalidation.JPA_EVENT_STORE);
         return Response.noContent().build();
     }
+
 
     /**
      * Query events
@@ -409,20 +432,15 @@ public class TestingResourceProvider implements RealmResourceProvider {
     }
 
     @GET
-    @Path("/clear-admin-event-store")
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response clearAdminEventStore() {
-        EventStoreProvider eventStore = session.getProvider(EventStoreProvider.class);
-        eventStore.clearAdmin();
-        return Response.noContent().build();
-    }
-
-    @GET
     @Path("/clear-admin-event-store-for-realm")
     @Produces(MediaType.APPLICATION_JSON)
     public Response clearAdminEventStore(@QueryParam("realmId") String realmId) {
         EventStoreProvider eventStore = session.getProvider(EventStoreProvider.class);
-        eventStore.clearAdmin(realmId);
+        RealmModel realm = session.realms().getRealm(realmId);
+
+        if (realm == null) throw ErrorResponse.error("Realm not found", Response.Status.NOT_FOUND);
+
+        eventStore.clearAdmin(realm);
         return Response.noContent().build();
     }
 
@@ -431,7 +449,11 @@ public class TestingResourceProvider implements RealmResourceProvider {
     @Produces(MediaType.APPLICATION_JSON)
     public Response clearAdminEventStore(@QueryParam("realmId") String realmId, @QueryParam("olderThan") long olderThan) {
         EventStoreProvider eventStore = session.getProvider(EventStoreProvider.class);
-        eventStore.clearAdmin(realmId, olderThan);
+        RealmModel realm = session.realms().getRealm(realmId);
+
+        if (realm == null) throw ErrorResponse.error("Realm not found", Response.Status.NOT_FOUND);
+
+        eventStore.clearAdmin(realm, olderThan);
         return Response.noContent().build();
     }
 
@@ -617,7 +639,7 @@ public class TestingResourceProvider implements RealmResourceProvider {
         if (realm == null) return false;
         UserProvider userProvider = session.getProvider(UserProvider.class);
         UserModel user = userProvider.getUserByUsername(realm, userName);
-        return session.userCredentialManager().isValid(realm, user, UserCredentialModel.password(password));
+        return user.credentialManager().isValid(UserCredentialModel.password(password));
     }
 
     @GET
@@ -652,7 +674,7 @@ public class TestingResourceProvider implements RealmResourceProvider {
         RealmModel realm = getRealmByName(realmName);
         AuthenticationFlowModel flow = realm.getClientAuthenticationFlow();
         if (flow == null) return null;
-        return ModelToRepresentation.toRepresentation(realm, flow);
+        return ModelToRepresentation.toRepresentation(session, realm, flow);
     }
 
     @GET
@@ -662,7 +684,7 @@ public class TestingResourceProvider implements RealmResourceProvider {
         RealmModel realm = getRealmByName(realmName);
         AuthenticationFlowModel flow = realm.getResetCredentialsFlow();
         if (flow == null) return null;
-        return ModelToRepresentation.toRepresentation(realm, flow);
+        return ModelToRepresentation.toRepresentation(session, realm, flow);
     }
 
     @GET
@@ -873,89 +895,66 @@ public class TestingResourceProvider implements RealmResourceProvider {
         }
     }
 
+    @GET
+    @Path("/list-disabled-features")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Set<Profile.Feature> listDisabledFeatures() {
+        return Profile.getInstance().getDisabledFeatures();
+    }
+
     @POST
     @Path("/enable-feature/{feature}")
     @Consumes(MediaType.APPLICATION_JSON)
-    public Response enableFeature(@PathParam("feature") String feature) {
-        Profile.Feature featureProfile;
-
-        try {
-            featureProfile = Profile.Feature.valueOf(feature);
-        } catch (IllegalArgumentException e) {
-            System.err.printf("Feature '%s' doesn't exist!!\n", feature);
-            return Response.status(Response.Status.NOT_FOUND).build();
-        }
-
-        if (Profile.isFeatureEnabled(featureProfile))
-            return Response.noContent().build();
-
-        FeatureDeployerUtil.initBeforeChangeFeature(featureProfile);
-
-        System.setProperty("keycloak.profile.feature." + featureProfile.toString().toLowerCase(), "enabled");
-
-        String jbossServerConfigDir = System.getProperty("jboss.server.config.dir");
-        // If we are in jboss-based container, we need to write profile.properties file, otherwise the change in system property will disappear after restart
-        if (jbossServerConfigDir != null) {
-            setFeatureInProfileFile(new File(jbossServerConfigDir, "profile.properties"), featureProfile, "enabled");
-        }
-
-        Profile.init();
-
-        FeatureDeployerUtil.deployFactoriesAfterFeatureEnabled(featureProfile);
-
-        if (Profile.isFeatureEnabled(featureProfile))
-            return Response.noContent().build();
-        else
-            return Response.status(Response.Status.NOT_FOUND).build();
+    @Produces(MediaType.APPLICATION_JSON)
+    public Set<Profile.Feature> enableFeature(@PathParam("feature") String feature) {
+        return updateFeature(feature, true);
     }
 
     @POST
     @Path("/disable-feature/{feature}")
     @Consumes(MediaType.APPLICATION_JSON)
-    public Response disableFeature(@PathParam("feature") String feature) {
-        Profile.Feature featureProfile;
+    @Produces(MediaType.APPLICATION_JSON)
+    public Set<Profile.Feature> disableFeature(@PathParam("feature") String feature) {
+        return updateFeature(feature, false);
+    }
+
+    private Set<Profile.Feature> updateFeature(String featureKey, boolean shouldEnable) {
+        Profile.Feature feature;
 
         try {
-            featureProfile = Profile.Feature.valueOf(feature);
+            feature = Profile.Feature.valueOf(featureKey);
         } catch (IllegalArgumentException e) {
-            System.err.printf("Feature '%s' doesn't exist!!\n", feature);
-            return Response.status(Response.Status.NOT_FOUND).build();
+            System.err.printf("Feature '%s' doesn't exist!!\n", featureKey);
+            throw new BadRequestException();
         }
 
-        if (!Profile.isFeatureEnabled(featureProfile))
-            return Response.noContent().build();
+        if (Profile.getInstance().getFeatures().get(feature) != shouldEnable) {
+            FeatureDeployerUtil.initBeforeChangeFeature(feature);
 
-        FeatureDeployerUtil.initBeforeChangeFeature(featureProfile);
+            String jbossServerConfigDir = System.getProperty("jboss.server.config.dir");
+            // If we are in jboss-based container, we need to write profile.properties file, otherwise the change in system property will disappear after restart
+            if (jbossServerConfigDir != null) {
+                setFeatureInProfileFile(new File(jbossServerConfigDir, "profile.properties"), feature, shouldEnable ? "enabled" : "disabled");
+            }
 
-        disableFeatureProperties(featureProfile);
+            Profile current = Profile.getInstance();
 
-        String jbossServerConfigDir = System.getProperty("jboss.server.config.dir");
-        // If we are in jboss-based container, we need to write profile.properties file, otherwise the change in system property will disappear after restart
-        if (jbossServerConfigDir != null) {
-            setFeatureInProfileFile(new File(jbossServerConfigDir, "profile.properties"), featureProfile, "disabled");
+            Map<Profile.Feature, Boolean> updatedFeatures = new HashMap<>();
+            updatedFeatures.putAll(current.getFeatures());
+            updatedFeatures.put(feature, shouldEnable);
+
+            Profile.init(current.getName(), updatedFeatures);
+
+            if (shouldEnable) {
+                FeatureDeployerUtil.deployFactoriesAfterFeatureEnabled(feature);
+            } else {
+                FeatureDeployerUtil.undeployFactoriesAfterFeatureDisabled(feature);
+            }
         }
 
-        Profile.init();
-
-        FeatureDeployerUtil.undeployFactoriesAfterFeatureDisabled(featureProfile);
-
-        if (!Profile.isFeatureEnabled(featureProfile))
-            return Response.noContent().build();
-        else
-            return Response.status(Response.Status.NOT_FOUND).build();
+        return Profile.getInstance().getDisabledFeatures();
     }
 
-    /**
-     * KEYCLOAK-12958
-     */
-    private void disableFeatureProperties(Profile.Feature feature) {
-        Profile.Type type = Profile.getName().equals("product") ? feature.getTypeProduct() : feature.getTypeProject();
-        if (type.equals(Profile.Type.DEFAULT)) {
-            System.setProperty("keycloak.profile.feature." + feature.toString().toLowerCase(), "disabled");
-        } else {
-            System.getProperties().remove("keycloak.profile.feature." + feature.toString().toLowerCase());
-        }
-    }
 
     @GET
     @Path("/set-system-property")
@@ -986,7 +985,7 @@ public class TestingResourceProvider implements RealmResourceProvider {
      * See URLUtils.sendPOSTWithWebDriver for more details
      *
      * @param postRequestUrl Absolute URL. It can include query parameters etc. The POST request will be send to this URL
-     * @param encodedFormParameters Encoded parameters in the form of "param1=value1:param2=value2"
+     * @param encodedFormParameters Encoded parameters in the form of "param1=value1&param2=value2"
      * @return
      */
     @GET
@@ -1031,7 +1030,7 @@ public class TestingResourceProvider implements RealmResourceProvider {
         builder.append("</HTML>");
 
         return Response.status(Response.Status.OK)
-                .type(javax.ws.rs.core.MediaType.TEXT_HTML_TYPE)
+                .type(jakarta.ws.rs.core.MediaType.TEXT_HTML_TYPE)
                 .entity(builder.toString()).build();
 
     }
@@ -1048,6 +1047,19 @@ public class TestingResourceProvider implements RealmResourceProvider {
         return ErrorPage.error(session, session.getContext().getAuthenticationSession(), Response.Status.BAD_REQUEST, message == null ? "" : message);
     }
 
+    @GET
+    @Path("/get-provider-implementation-class")
+    @Produces(MediaType.APPLICATION_JSON)
+    public String getProviderClassName(@QueryParam("providerClass") String providerClass, @QueryParam("providerId") String providerId) {
+        try {
+            Class<? extends Provider> providerClazz = (Class<? extends Provider>) Class.forName(providerClass);
+            Provider provider = (providerId == null) ? session.getProvider(providerClazz) : session.getProvider(providerClazz, providerId);
+            return provider.getClass().getName();
+        } catch (ClassNotFoundException cnfe) {
+            throw new RuntimeException("Cannot find provider class: " + providerClass, cnfe);
+        }
+    }
+
     private RealmModel getRealmByName(String realmName) {
         RealmProvider realmProvider = session.getProvider(RealmProvider.class);
         RealmModel realm = realmProvider.getRealmByName(realmName);
@@ -1055,6 +1067,26 @@ public class TestingResourceProvider implements RealmResourceProvider {
             throw new NotFoundException("Realm not found");
         }
         return realm;
+    }
+
+    @GET
+    @Path("/disable-truststore-spi")
+    @NoCache
+    public void disableTruststoreSpi() {
+        FileTruststoreProviderFactory factory = (FileTruststoreProviderFactory) session.getKeycloakSessionFactory().getProviderFactory(TruststoreProvider.class);
+        this.factory.truststoreProvider = factory.create(session);
+        factory.setProvider(null);
+    }
+
+    @GET
+    @Path("/reenable-truststore-spi")
+    @NoCache
+    public void reenableTruststoreSpi() {
+        if (this.factory.truststoreProvider == null) {
+            throw new IllegalStateException("Cannot reenable provider as it was not disabled");
+        }
+        FileTruststoreProviderFactory factory = (FileTruststoreProviderFactory) session.getKeycloakSessionFactory().getProviderFactory(TruststoreProvider.class);
+        factory.setProvider(this.factory.truststoreProvider);
     }
 
 }

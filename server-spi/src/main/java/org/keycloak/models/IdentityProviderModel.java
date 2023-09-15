@@ -30,10 +30,15 @@ public class IdentityProviderModel implements Serializable {
 
     public static final String ALLOWED_CLOCK_SKEW = "allowedClockSkew";
     public static final String LOGIN_HINT = "loginHint";
+    public static final String PASS_MAX_AGE = "passMaxAge";
 
     public static final String SYNC_MODE = "syncMode";
     
     public static final String HIDE_ON_LOGIN = "hideOnLoginPage";
+
+    public static final String FILTERED_BY_CLAIMS = "filteredByClaim";
+    public static final String CLAIM_FILTER_NAME = "claimFilterName";
+    public static final String CLAIM_FILTER_VALUE = "claimFilterValue";
 
     private String internalId;
 
@@ -69,6 +74,8 @@ public class IdentityProviderModel implements Serializable {
 
     private String displayName;
 
+    private String displayIconClasses;
+
     private IdentityProviderSyncMode syncMode;
 
     /**
@@ -95,6 +102,7 @@ public class IdentityProviderModel implements Serializable {
             this.addReadTokenRoleOnCreate = model.addReadTokenRoleOnCreate;
             this.firstBrokerLoginFlowId = model.getFirstBrokerLoginFlowId();
             this.postBrokerLoginFlowId = model.getPostBrokerLoginFlowId();
+            this.displayIconClasses = model.getDisplayIconClasses();
         }
     }
 
@@ -204,6 +212,10 @@ public class IdentityProviderModel implements Serializable {
         this.displayName = displayName;
     }
 
+    public String getDisplayIconClasses() {
+        return displayIconClasses;
+    }
+
     /**
      * <p>Validates this configuration.
      * 
@@ -230,6 +242,14 @@ public class IdentityProviderModel implements Serializable {
         getConfig().put(LOGIN_HINT, String.valueOf(loginHint));
     }
 
+    public boolean isPassMaxAge() {
+        return Boolean.valueOf(getConfig().get(PASS_MAX_AGE));
+    }
+
+    public void setPassMaxAge(boolean passMaxAge) {
+        getConfig().put(PASS_MAX_AGE, String.valueOf(passMaxAge));
+    }
+
      
     public boolean isHideOnLogin() {
         return Boolean.valueOf(getConfig().get(HIDE_ON_LOGIN));
@@ -237,5 +257,29 @@ public class IdentityProviderModel implements Serializable {
 
     public void setHideOnLogin(boolean hideOnLogin) {
         getConfig().put(HIDE_ON_LOGIN, String.valueOf(hideOnLogin));
+    }
+
+    public boolean isFilteredByClaims() {
+        return Boolean.valueOf(getConfig().getOrDefault(FILTERED_BY_CLAIMS, Boolean.toString(false)));
+    }
+
+    public void setFilteredByClaims(boolean filteredByClaims) {
+        getConfig().put(FILTERED_BY_CLAIMS, String.valueOf(filteredByClaims));
+    }
+
+    public String getClaimFilterName() {
+        return String.valueOf(getConfig().getOrDefault(CLAIM_FILTER_NAME, ""));
+    }
+
+    public void setClaimFilterName(String claimFilterName) {
+        getConfig().put(CLAIM_FILTER_NAME, claimFilterName);
+    }
+
+    public String getClaimFilterValue() {
+        return String.valueOf(getConfig().getOrDefault(CLAIM_FILTER_VALUE, ""));
+    }
+
+    public void setClaimFilterValue(String claimFilterValue) {
+        getConfig().put(CLAIM_FILTER_VALUE, claimFilterValue);
     }
 }

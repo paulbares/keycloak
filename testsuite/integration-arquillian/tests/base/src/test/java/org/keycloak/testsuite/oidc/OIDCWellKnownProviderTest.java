@@ -26,6 +26,7 @@ import org.junit.Test;
 import org.keycloak.OAuth2Constants;
 import org.keycloak.admin.client.resource.RealmResource;
 import org.keycloak.broker.provider.util.SimpleHttp;
+import org.keycloak.common.Profile;
 import org.keycloak.crypto.Algorithm;
 import org.keycloak.jose.jwe.JWEConstants;
 import org.keycloak.jose.jwk.JSONWebKeySet;
@@ -45,7 +46,7 @@ import org.keycloak.services.resources.RealmsResource;
 import org.keycloak.testsuite.AbstractKeycloakTest;
 import org.keycloak.testsuite.Assert;
 import org.keycloak.testsuite.admin.AbstractAdminTest;
-import org.keycloak.testsuite.arquillian.annotation.AuthServerContainerExclude;
+import org.keycloak.testsuite.arquillian.annotation.EnableFeature;
 import org.keycloak.testsuite.forms.BrowserFlowTest;
 import org.keycloak.testsuite.forms.LevelOfAssuranceFlowTest;
 import org.keycloak.testsuite.util.AdminClientUtil;
@@ -55,11 +56,11 @@ import org.keycloak.testsuite.util.TokenSignatureUtil;
 import org.keycloak.testsuite.wellknown.CustomOIDCWellKnownProviderFactory;
 import org.keycloak.util.JsonSerialization;
 
-import javax.ws.rs.client.Client;
-import javax.ws.rs.client.Invocation;
-import javax.ws.rs.client.WebTarget;
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.UriBuilder;
+import jakarta.ws.rs.client.Client;
+import jakarta.ws.rs.client.Invocation;
+import jakarta.ws.rs.client.WebTarget;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriBuilder;
 import java.io.IOException;
 import java.net.URI;
 import java.util.HashMap;
@@ -68,7 +69,6 @@ import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
-import static org.keycloak.testsuite.arquillian.annotation.AuthServerContainerExclude.AuthServer.REMOTE;
 
 /**
  * @author <a href="mailto:mposolda@redhat.com">Marek Posolda</a>
@@ -133,6 +133,7 @@ public class OIDCWellKnownProviderTest extends AbstractKeycloakTest {
 
             // Support standard + implicit + hybrid flow
             assertContains(oidcConfig.getResponseTypesSupported(), OAuth2Constants.CODE, OIDCResponseType.ID_TOKEN, "id_token token", "code id_token", "code token", "code id_token token");
+            assertEquals(oidcConfig.getGrantTypesSupported().size(),7);
             assertContains(oidcConfig.getGrantTypesSupported(), OAuth2Constants.AUTHORIZATION_CODE, OAuth2Constants.IMPLICIT,
                 OAuth2Constants.DEVICE_CODE_GRANT_TYPE);
             assertContains(oidcConfig.getResponseModesSupported(), "query", "fragment", "form_post", "jwt", "query.jwt", "fragment.jwt", "form_post.jwt");
@@ -217,6 +218,9 @@ public class OIDCWellKnownProviderTest extends AbstractKeycloakTest {
             assertTrue(oidcConfig.getFrontChannelLogoutSessionSupported());
             assertTrue(oidcConfig.getFrontChannelLogoutSupported());
 
+            // DPoP
+            Assert.assertNames(oidcConfig.getDpopSigningAlgValuesSupported(), Algorithm.PS256, Algorithm.PS384, Algorithm.PS512,
+                    Algorithm.RS256, Algorithm.RS384, Algorithm.RS512, Algorithm.ES256, Algorithm.ES384, Algorithm.ES512);
         } finally {
             client.close();
         }
@@ -287,7 +291,7 @@ public class OIDCWellKnownProviderTest extends AbstractKeycloakTest {
         String jwksUri = representation.getJwksUri();
 
         JSONWebKeySet jsonWebKeySet = SimpleHttp.doGet(jwksUri, client).asJson(JSONWebKeySet.class);
-        assertEquals(2, jsonWebKeySet.getKeys().length);
+        assertEquals(3, jsonWebKeySet.getKeys().length);
     }
 
     @Test
@@ -304,7 +308,7 @@ public class OIDCWellKnownProviderTest extends AbstractKeycloakTest {
     }
 
     @Test
-    @AuthServerContainerExclude(REMOTE)
+    
     public void testAcrValuesSupported() throws IOException {
         Client client = AdminClientUtil.createResteasyClient();
         try {
@@ -355,7 +359,7 @@ public class OIDCWellKnownProviderTest extends AbstractKeycloakTest {
     }
 
     @Test
-    @AuthServerContainerExclude(REMOTE)
+    
     public void testDefaultProviderCustomizations() throws IOException {
         Client client = AdminClientUtil.createResteasyClient();
         try {
@@ -380,6 +384,19 @@ public class OIDCWellKnownProviderTest extends AbstractKeycloakTest {
             Assert.assertNull(oidcConfig.getScopesSupported());
         } finally {
             getTestingClient().testing().setSystemPropertyOnServer(CustomOIDCWellKnownProviderFactory.INCLUDE_CLIENT_SCOPES, null);
+            client.close();
+        }
+    }
+
+    @Test
+    @EnableFeature(value = Profile.Feature.TOKEN_EXCHANGE, skipRestart = true)
+    public void testGrantTypesSupportedWithTokenExchange() throws IOException {
+        Client client = AdminClientUtil.createResteasyClient();
+        try {
+            OIDCConfigurationRepresentation oidcConfig = getOIDCDiscoveryRepresentation(client, OAuthClient.AUTH_SERVER_ROOT);
+            assertEquals(oidcConfig.getGrantTypesSupported().size(),8);
+            assertContains(oidcConfig.getGrantTypesSupported(), OAuth2Constants.TOKEN_EXCHANGE_GRANT_TYPE);
+        } finally {
             client.close();
         }
     }

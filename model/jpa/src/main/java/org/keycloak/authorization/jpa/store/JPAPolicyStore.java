@@ -1,13 +1,12 @@
 /*
- * JBoss, Home of Professional Open Source.
- * Copyright 2016 Red Hat, Inc., and individual contributors
- * as indicated by the @author tags.
+ * Copyright 2022 Red Hat, Inc. and/or its affiliates
+ * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -26,14 +25,14 @@ import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
-import javax.persistence.EntityManager;
-import javax.persistence.FlushModeType;
-import javax.persistence.NoResultException;
-import javax.persistence.TypedQuery;
-import javax.persistence.criteria.CriteriaBuilder;
-import javax.persistence.criteria.CriteriaQuery;
-import javax.persistence.criteria.Predicate;
-import javax.persistence.criteria.Root;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.FlushModeType;
+import jakarta.persistence.NoResultException;
+import jakarta.persistence.TypedQuery;
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
 
 import org.keycloak.authorization.AuthorizationProvider;
 import org.keycloak.authorization.jpa.entities.PolicyEntity;
@@ -43,9 +42,10 @@ import org.keycloak.authorization.model.ResourceServer;
 import org.keycloak.authorization.model.Scope;
 import org.keycloak.authorization.store.PolicyStore;
 import org.keycloak.authorization.store.StoreFactory;
+import org.keycloak.models.RealmModel;
 import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.representations.idm.authorization.AbstractPolicyRepresentation;
-import javax.persistence.LockModeType;
+import jakarta.persistence.LockModeType;
 
 import static org.keycloak.models.jpa.PaginationUtils.paginateQuery;
 import static org.keycloak.utils.StreamsUtil.closing;
@@ -83,7 +83,7 @@ public class JPAPolicyStore implements PolicyStore {
     }
 
     @Override
-    public void delete(String id) {
+    public void delete(RealmModel realm, String id) {
         PolicyEntity policy = entityManager.find(PolicyEntity.class, id, LockModeType.PESSIMISTIC_WRITE);
         if (policy != null) {
             this.entityManager.remove(policy);
@@ -92,7 +92,7 @@ public class JPAPolicyStore implements PolicyStore {
 
 
     @Override
-    public Policy findById(ResourceServer resourceServer, String id) {
+    public Policy findById(RealmModel realm, ResourceServer resourceServer, String id) {
         if (id == null) {
             return null;
         }
@@ -130,7 +130,7 @@ public class JPAPolicyStore implements PolicyStore {
         List<String> result = query.getResultList();
         List<Policy> list = new LinkedList<>();
         for (String id : result) {
-            Policy policy = provider.getStoreFactory().getPolicyStore().findById(resourceServer, id);
+            Policy policy = provider.getStoreFactory().getPolicyStore().findById(JPAAuthorizationStoreFactory.NULL_REALM, resourceServer, id);
             if (Objects.nonNull(policy)) {
                 list.add(policy);
             }
@@ -139,9 +139,9 @@ public class JPAPolicyStore implements PolicyStore {
     }
 
     @Override
-    public List<Policy> findByResourceServer(ResourceServer resourceServer, Map<Policy.FilterOption, String[]> attributes, Integer firstResult, Integer maxResults) {
+    public List<Policy> find(RealmModel realm, ResourceServer resourceServer, Map<Policy.FilterOption, String[]> attributes, Integer firstResult, Integer maxResults) {
         CriteriaBuilder builder = entityManager.getCriteriaBuilder();
-        CriteriaQuery<PolicyEntity> querybuilder = builder.createQuery(PolicyEntity.class);
+        CriteriaQuery<String> querybuilder = builder.createQuery(String.class);
         Root<PolicyEntity> root = querybuilder.from(PolicyEntity.class);
         List<Predicate> predicates = new ArrayList();
         querybuilder.select(root.get("id"));
@@ -198,8 +198,9 @@ public class JPAPolicyStore implements PolicyStore {
 
         List<String> result = paginateQuery(query, firstResult, maxResults).getResultList();
         List<Policy> list = new LinkedList<>();
+        PolicyStore policyStore = provider.getStoreFactory().getPolicyStore();
         for (String id : result) {
-            Policy policy = provider.getStoreFactory().getPolicyStore().findById(resourceServer, id);
+            Policy policy = policyStore.findById(JPAAuthorizationStoreFactory.NULL_REALM, resourceServer, id);
             if (Objects.nonNull(policy)) {
                 list.add(policy);
             }
@@ -218,7 +219,7 @@ public class JPAPolicyStore implements PolicyStore {
         PolicyStore storeFactory = provider.getStoreFactory().getPolicyStore();
 
         closing(query.getResultStream()
-                .map(entity -> storeFactory.findById(resourceServer, entity.getId()))
+                .map(entity -> storeFactory.findById(JPAAuthorizationStoreFactory.NULL_REALM, resourceServer, entity.getId()))
                 .filter(Objects::nonNull))
                 .forEach(consumer::accept);
     }
@@ -254,7 +255,7 @@ public class JPAPolicyStore implements PolicyStore {
         PolicyStore storeFactory = provider.getStoreFactory().getPolicyStore();
 
         for (PolicyEntity entity : query.getResultList()) {
-            list.add(storeFactory.findById(resourceServer, entity.getId()));
+            list.add(storeFactory.findById(JPAAuthorizationStoreFactory.NULL_REALM, resourceServer, entity.getId()));
         }
 
         return list;
@@ -295,7 +296,7 @@ public class JPAPolicyStore implements PolicyStore {
         List<String> result = query.getResultList();
         List<Policy> list = new LinkedList<>();
         for (String id : result) {
-            Policy policy = provider.getStoreFactory().getPolicyStore().findById(resourceServer, id);
+            Policy policy = provider.getStoreFactory().getPolicyStore().findById(JPAAuthorizationStoreFactory.NULL_REALM, resourceServer, id);
             if (Objects.nonNull(policy)) {
                 list.add(policy);
             }
@@ -315,7 +316,7 @@ public class JPAPolicyStore implements PolicyStore {
         List<String> result = query.getResultList();
         List<Policy> list = new LinkedList<>();
         for (String id : result) {
-            Policy policy = provider.getStoreFactory().getPolicyStore().findById(resourceServer, id);
+            Policy policy = provider.getStoreFactory().getPolicyStore().findById(JPAAuthorizationStoreFactory.NULL_REALM, resourceServer, id);
             if (Objects.nonNull(policy)) {
                 list.add(policy);
             }

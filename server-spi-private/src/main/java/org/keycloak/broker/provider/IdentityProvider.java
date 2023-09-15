@@ -26,8 +26,11 @@ import org.keycloak.models.UserSessionModel;
 import org.keycloak.provider.Provider;
 import org.keycloak.sessions.AuthenticationSessionModel;
 
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.UriInfo;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
+
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * @author Pedro Igor
@@ -60,9 +63,10 @@ public interface IdentityProvider<C extends IdentityProviderModel> extends Provi
          * Called when user cancelled authentication on the IDP side - for example user didn't approve consent page on the IDP side.
          * Assumption is that authenticationSession is set in the {@link org.keycloak.models.KeycloakContext} when this method is called
          *
+         * @param idpConfig identity provider config
          * @return see description
          */
-        Response cancelled();
+        Response cancelled(IdentityProviderModel idpConfig);
 
         /**
          * Called when error happened on the IDP side.
@@ -72,6 +76,8 @@ public interface IdentityProvider<C extends IdentityProviderModel> extends Provi
          */
         Response error(String message);
     }
+
+    C getConfig();
 
 
     void preprocessFederatedIdentity(KeycloakSession session, RealmModel realm, BrokeredIdentityContext context);
@@ -97,7 +103,7 @@ public interface IdentityProvider<C extends IdentityProviderModel> extends Provi
     Response performLogin(AuthenticationRequest request);
 
     /**
-     * <p>Returns a {@link javax.ws.rs.core.Response} containing the token previously stored during the authentication process for a
+     * <p>Returns a {@link jakarta.ws.rs.core.Response} containing the token previously stored during the authentication process for a
      * specific user.</p>
      *
      * @param identity
@@ -130,5 +136,14 @@ public interface IdentityProvider<C extends IdentityProviderModel> extends Provi
      * @return
      */
     IdentityProviderDataMarshaller getMarshaller();
+
+    /**
+     * Checks whether a mapper is supported for this Identity Provider.
+     */
+    default boolean isMapperSupported(IdentityProviderMapper mapper) {
+    List<String> compatibleIdps = Arrays.asList(mapper.getCompatibleProviders());
+        return compatibleIdps.contains(IdentityProviderMapper.ANY_PROVIDER)
+            || compatibleIdps.contains(getConfig().getProviderId());
+    }
 
 }

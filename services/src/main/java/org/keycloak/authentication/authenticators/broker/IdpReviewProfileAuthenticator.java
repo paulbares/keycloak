@@ -39,8 +39,11 @@ import org.keycloak.userprofile.ValidationException;
 import org.keycloak.userprofile.UserProfile;
 import org.keycloak.userprofile.UserProfileProvider;
 
-import javax.ws.rs.core.MultivaluedMap;
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.core.Response;
+
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -107,7 +110,6 @@ public class IdpReviewProfileAuthenticator extends AbstractIdpAuthenticator {
     @Override
     protected void actionImpl(AuthenticationFlowContext context, SerializedBrokeredIdentityContext userCtx, BrokeredIdentityContext brokerContext) {
         EventBuilder event = context.getEvent();
-        //velias: looks like UPDATE_PROFILE event is not fired. IMHO it should not be fired here as user record in keycloak is not changed, user doesn't exist yet 
         event.event(EventType.UPDATE_PROFILE).detail(Details.CONTEXT, UserProfileContext.IDP_REVIEW.name());
         MultivaluedMap<String, String> formData = context.getHttpRequest().getDecodedFormParameters();
         UserModelDelegate updatedProfile = new UserModelDelegate(null) {
@@ -146,10 +148,17 @@ public class IdpReviewProfileAuthenticator extends AbstractIdpAuthenticator {
             public String getUsername() {
                 return userCtx.getUsername();
             }
+
+            @Override
+            public String getServiceAccountClientLink() {
+                return null;
+            }
         };
 
         UserProfileProvider profileProvider = context.getSession().getProvider(UserProfileProvider.class);
-        UserProfile profile = profileProvider.create(UserProfileContext.IDP_REVIEW, formData, updatedProfile);
+        Map<String, List<String>> attributes = new HashMap<>(formData);
+        attributes.putIfAbsent(UserModel.USERNAME, Collections.singletonList(updatedProfile.getUsername()));
+        UserProfile profile = profileProvider.create(UserProfileContext.IDP_REVIEW, attributes, updatedProfile);
 
         try {
             String oldEmail = userCtx.getEmail();

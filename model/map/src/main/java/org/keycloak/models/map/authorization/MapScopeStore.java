@@ -1,5 +1,5 @@
 /*
- * Copyright 2021 Red Hat, Inc. and/or its affiliates
+ * Copyright 2022 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,13 +23,12 @@ import org.keycloak.authorization.model.ResourceServer;
 import org.keycloak.authorization.model.Scope;
 import org.keycloak.authorization.model.Scope.SearchableFields;
 import org.keycloak.authorization.store.ScopeStore;
-import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ModelDuplicateException;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.map.authorization.adapter.MapScopeAdapter;
 import org.keycloak.models.map.authorization.entity.MapScopeEntity;
-import org.keycloak.models.map.authorization.entity.MapScopeEntityImpl;
-import org.keycloak.models.map.storage.MapKeycloakTransaction;
+import org.keycloak.models.map.common.DeepCloner;
+import org.keycloak.models.map.common.HasRealmId;
 import org.keycloak.models.map.storage.MapStorage;
 import org.keycloak.models.map.storage.ModelCriteriaBuilder.Operator;
 import org.keycloak.models.map.storage.criteria.DefaultModelCriteria;
@@ -48,27 +47,29 @@ public class MapScopeStore implements ScopeStore {
 
     private static final Logger LOG = Logger.getLogger(MapScopeStore.class);
     private final AuthorizationProvider authorizationProvider;
-    final MapKeycloakTransaction<MapScopeEntity, Scope> tx;
-    private final KeycloakSession session;
+    final MapStorage<MapScopeEntity, Scope> store;
+    private final boolean storeHasRealmId;
 
-    public MapScopeStore(KeycloakSession session, MapStorage<MapScopeEntity, Scope> scopeStore, AuthorizationProvider provider) {
+    public MapScopeStore(MapStorage<MapScopeEntity, Scope> scopeStore, AuthorizationProvider provider) {
         this.authorizationProvider = provider;
-        this.tx = scopeStore.createTransaction(session);
-        session.getTransactionManager().enlist(tx);
-        this.session = session;
+        this.store = scopeStore;
+        this.storeHasRealmId = store instanceof HasRealmId;
     }
 
-    private Function<MapScopeEntity, Scope> entityToAdapterFunc(ResourceServer resourceServer) {
-        return origEntity -> new MapScopeAdapter(resourceServer == null ? findResourceServer(origEntity) : resourceServer, origEntity, authorizationProvider.getStoreFactory());
+    private Function<MapScopeEntity, Scope> entityToAdapterFunc(RealmModel realm, ResourceServer resourceServer) {
+        return origEntity -> new MapScopeAdapter(realm, resourceServer, origEntity, authorizationProvider.getStoreFactory());
     }
 
-    private ResourceServer findResourceServer(MapScopeEntity entity) {
-        RealmModel realm = session.realms().getRealm(entity.getRealmId());
-        return authorizationProvider.getStoreFactory().getResourceServerStore().findById(realm, entity.getResourceServerId());
+    private MapStorage<MapScopeEntity, Scope> storeWithRealm(RealmModel realm) {
+        if (storeHasRealmId) {
+            ((HasRealmId) store).setRealmId(realm == null ? null : realm.getId());
+        }
+        return store;
     }
 
-    private DefaultModelCriteria<Scope> forResourceServer(ResourceServer resourceServer) {
-        DefaultModelCriteria<Scope> mcb = criteria();
+    private DefaultModelCriteria<Scope> forRealmAndResourceServer(RealmModel realm, ResourceServer resourceServer) {
+        DefaultModelCriteria<Scope> mcb = DefaultModelCriteria.<Scope>criteria()
+                .compare(Scope.SearchableFields.REALM_ID, Operator.EQ, realm.getId());
 
         return resourceServer == null
                 ? mcb
@@ -80,66 +81,73 @@ public class MapScopeStore implements ScopeStore {
     public Scope create(ResourceServer resourceServer, String id, String name) {
         LOG.tracef("create(%s, %s, %s)%s", id, name, resourceServer, getShortStackTrace());
 
-
+        RealmModel realm = resourceServer.getRealm();
         // @UniqueConstraint(columnNames = {"NAME", "RESOURCE_SERVER_ID"})
-        DefaultModelCriteria<Scope> mcb = forResourceServer(resourceServer)
+        DefaultModelCriteria<Scope> mcb = forRealmAndResourceServer(realm, resourceServer)
                 .compare(SearchableFields.NAME, Operator.EQ, name);
 
-        if (tx.getCount(withCriteria(mcb)) > 0) {
+        if (storeWithRealm(realm).exists(withCriteria(mcb))) {
             throw new ModelDuplicateException("Scope with name '" + name + "' for " + resourceServer.getId() + " already exists");
         }
 
-        MapScopeEntity entity = new MapScopeEntityImpl();
+        MapScopeEntity entity = DeepCloner.DUMB_CLONER.newInstance(MapScopeEntity.class);
         entity.setId(id);
         entity.setName(name);
         entity.setResourceServerId(resourceServer.getId());
         entity.setRealmId(resourceServer.getRealm().getId());
 
-        entity = tx.create(entity);
+        entity = storeWithRealm(realm).create(entity);
 
-        return entity == null ? null : entityToAdapterFunc(resourceServer).apply(entity);
+        return entity == null ? null : entityToAdapterFunc(realm, resourceServer).apply(entity);
     }
 
     @Override
-    public void delete(String id) {
+    public void delete(RealmModel realm, String id) {
         LOG.tracef("delete(%s)%s", id, getShortStackTrace());
-        tx.delete(id);
+        Scope scope = findById(realm, null, id);
+        if (scope == null) return;
+
+        storeWithRealm(realm).delete(id);
     }
 
     @Override
-    public Scope findById(ResourceServer resourceServer, String id) {
+    public Scope findById(RealmModel realm, ResourceServer resourceServer, String id) {
         LOG.tracef("findById(%s, %s)%s", id, resourceServer, getShortStackTrace());
 
-        return tx.read(withCriteria(forResourceServer(resourceServer)
+        if (id == null) return null;
+
+        return storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer)
                 .compare(SearchableFields.ID, Operator.EQ, id)))
                 .findFirst()
-                .map(entityToAdapterFunc(resourceServer))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .orElse(null);
     }
 
     @Override
     public Scope findByName(ResourceServer resourceServer, String name) {
         LOG.tracef("findByName(%s, %s)%s", name, resourceServer, getShortStackTrace());
+        RealmModel realm = resourceServer.getRealm();
 
-        return tx.read(withCriteria(forResourceServer(resourceServer).compare(SearchableFields.NAME,
+        return storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer).compare(SearchableFields.NAME,
                 Operator.EQ, name)))
                 .findFirst()
-                .map(entityToAdapterFunc(resourceServer))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .orElse(null);
     }
 
     @Override
     public List<Scope> findByResourceServer(ResourceServer resourceServer) {
         LOG.tracef("findByResourceServer(%s)%s", resourceServer, getShortStackTrace());
-
-        return tx.read(withCriteria(forResourceServer(resourceServer)))
-                .map(entityToAdapterFunc(resourceServer))
+        RealmModel realm = resourceServer.getRealm();
+        return storeWithRealm(realm).read(withCriteria(forRealmAndResourceServer(realm, resourceServer)))
+                .map(entityToAdapterFunc(realm, resourceServer))
                 .collect(Collectors.toList());
     }
 
     @Override
     public List<Scope> findByResourceServer(ResourceServer resourceServer, Map<Scope.FilterOption, String[]> attributes, Integer firstResult, Integer maxResults) {
-        DefaultModelCriteria<Scope> mcb = forResourceServer(resourceServer);
+        RealmModel realm = resourceServer.getRealm();
+        DefaultModelCriteria<Scope> mcb = forRealmAndResourceServer(realm, resourceServer);
 
         for (Scope.FilterOption filterOption : attributes.keySet()) {
             String[] value = attributes.get(filterOption);
@@ -156,8 +164,8 @@ public class MapScopeStore implements ScopeStore {
             }
         }
 
-        return tx.read(withCriteria(mcb).pagination(firstResult, maxResults, SearchableFields.NAME))
-            .map(entityToAdapterFunc(resourceServer))
+        return storeWithRealm(realm).read(withCriteria(mcb).pagination(firstResult, maxResults, SearchableFields.NAME))
+            .map(entityToAdapterFunc(realm, resourceServer))
             .collect(Collectors.toList());
     }
 
@@ -167,12 +175,12 @@ public class MapScopeStore implements ScopeStore {
         DefaultModelCriteria<Scope> mcb = criteria();
         mcb = mcb.compare(SearchableFields.REALM_ID, Operator.EQ, realm.getId());
 
-        tx.delete(withCriteria(mcb));
+        storeWithRealm(realm).delete(withCriteria(mcb));
     }
 
-    public void preRemove(ResourceServer resourceServer) {
-        LOG.tracef("preRemove(%s)%s", resourceServer, getShortStackTrace());
+    public void preRemove(RealmModel realm, ResourceServer resourceServer) {
+        LOG.tracef("preRemove(%s, %s)%s", realm, resourceServer, getShortStackTrace());
 
-        tx.delete(withCriteria(forResourceServer(resourceServer)));
+        storeWithRealm(realm).delete(withCriteria(forRealmAndResourceServer(resourceServer.getRealm(), resourceServer)));
     }
 }

@@ -16,6 +16,7 @@
  */
 package org.keycloak.models.map.authSession;
 
+import org.keycloak.models.map.annotations.CollectionKey;
 import org.keycloak.models.map.annotations.GenerateEntityImplementations;
 import org.keycloak.models.map.common.DeepCloner;
 import org.keycloak.models.map.common.UpdatableEntity;
@@ -31,8 +32,22 @@ import java.util.Set;
 @DeepCloner.Root
 public interface MapAuthenticationSessionEntity extends UpdatableEntity {
 
+    @CollectionKey
     String getTabId();
     void setTabId(String tabId);
+
+    /**
+     * Returns a point in time (timestamp in milliseconds since The Epoch) when the authentication session entity was created.
+     *
+     * @return a timestamp in milliseconds since The Epoch or {@code null} when the time is unknown
+     */
+    Long getTimestamp();
+
+    /**
+     * Sets a point in the (timestamp in milliseconds since The Epoch) when the authentication session entity was created.
+     * @param timestamp a timestamp in milliseconds since The Epoch or {@code null} when the time is unknown
+     */
+    void setTimestamp(Long timestamp);
 
     Map<String, String> getUserSessionNotes();
     void setUserSessionNotes(Map<String, String> userSessionNotes);
@@ -43,9 +58,6 @@ public interface MapAuthenticationSessionEntity extends UpdatableEntity {
 
     String getAuthUserId();
     void setAuthUserId(String authUserId);
-
-    Long getTimestamp();
-    void setTimestamp(Long timestamp);
 
     String getRedirectUri();
     void setRedirectUri(String redirectUri);

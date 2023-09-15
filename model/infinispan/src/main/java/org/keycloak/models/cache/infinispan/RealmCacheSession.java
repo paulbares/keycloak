@@ -26,6 +26,8 @@ import org.keycloak.models.cache.CachedRealmModel;
 import org.keycloak.models.cache.infinispan.entities.*;
 import org.keycloak.models.cache.infinispan.events.*;
 import org.keycloak.models.utils.KeycloakModelUtils;
+import org.keycloak.storage.DatastoreProvider;
+import org.keycloak.storage.LegacyStoreManagers;
 import org.keycloak.storage.StorageId;
 import org.keycloak.storage.client.ClientStorageProviderModel;
 
@@ -119,11 +121,13 @@ public class RealmCacheSession implements CacheRealmProvider {
 
     protected boolean clearAll;
     protected final long startupRevision;
+    private final LegacyStoreManagers datastoreProvider;
 
     public RealmCacheSession(RealmCacheManager cache, KeycloakSession session) {
         this.cache = cache;
         this.session = session;
         this.startupRevision = cache.getCurrentCounter();
+        this.datastoreProvider = (LegacyStoreManagers) session.getProvider(DatastoreProvider.class);
         session.getTransactionManager().enlistPrepare(getPrepareTransaction());
         session.getTransactionManager().enlistAfterCompletion(getAfterTransaction());
     }
@@ -146,31 +150,31 @@ public class RealmCacheSession implements CacheRealmProvider {
     public RealmProvider getRealmDelegate() {
         if (!transactionActive) throw new IllegalStateException("Cannot access delegate without a transaction");
         if (realmDelegate != null) return realmDelegate;
-        realmDelegate = session.realmLocalStorage();
+        realmDelegate = session.getProvider(RealmProvider.class);
         return realmDelegate;
     }
     public ClientProvider getClientDelegate() {
         if (!transactionActive) throw new IllegalStateException("Cannot access delegate without a transaction");
         if (clientDelegate != null) return clientDelegate;
-        clientDelegate = session.clientStorageManager();
+        clientDelegate = this.datastoreProvider.clientStorageManager();
         return clientDelegate;
     }
     public ClientScopeProvider getClientScopeDelegate() {
         if (!transactionActive) throw new IllegalStateException("Cannot access delegate without a transaction");
         if (clientScopeDelegate != null) return clientScopeDelegate;
-        clientScopeDelegate = session.clientScopeStorageManager();
+        clientScopeDelegate = this.datastoreProvider.clientScopeStorageManager();
         return clientScopeDelegate;
     }
     public RoleProvider getRoleDelegate() {
         if (!transactionActive) throw new IllegalStateException("Cannot access delegate without a transaction");
         if (roleDelegate != null) return roleDelegate;
-        roleDelegate = session.roleStorageManager();
+        roleDelegate = this.datastoreProvider.roleStorageManager();
         return roleDelegate;
     }
     public GroupProvider getGroupDelegate() {
         if (!transactionActive) throw new IllegalStateException("Cannot access delegate without a transaction");
         if (groupDelegate != null) return groupDelegate;
-        groupDelegate = session.groupStorageManager();
+        groupDelegate = this.datastoreProvider.groupStorageManager();
         return groupDelegate;
     }
 
@@ -401,26 +405,38 @@ public class RealmCacheSession implements CacheRealmProvider {
 
     @Override
     public RealmModel getRealm(String id) {
-        CachedRealm cached = cache.get(id, CachedRealm.class);
-        if (cached != null) {
-            logger.tracev("by id cache hit: {0}", cached.getName());
-        }
-        boolean wasCached = false;
-        if (cached == null) {
-            Long loaded = cache.getCurrentRevision(id);
-            RealmModel model = getRealmDelegate().getRealm(id);
-            if (model == null) return null;
-            if (invalidations.contains(id)) return model;
-            cached = new CachedRealm(loaded, model);
-            cache.addRevisioned(cached, startupRevision);
-            wasCached =true;
-        } else if (invalidations.contains(id)) {
+        if (invalidations.contains(id)) {
             return getRealmDelegate().getRealm(id);
         } else if (managedRealms.containsKey(id)) {
             return managedRealms.get(id);
         }
-        RealmAdapter adapter = new RealmAdapter(session, cached, this);
-        if (wasCached) {
+        CachedRealm cached = cache.get(id, CachedRealm.class);
+        RealmAdapter adapter;
+        if (cached != null) {
+            logger.tracev("by id cache hit: {0}", cached.getName());
+            adapter = new RealmAdapter(session, cached, this);
+        } else {
+            adapter = cache.computeSerialized(session, id, this::prepareCachedRealm);
+            if (adapter == null) {
+                return null;
+            }
+        }
+        managedRealms.put(id, adapter);
+        return adapter;
+    }
+
+    private RealmAdapter prepareCachedRealm(String id, KeycloakSession session) {
+        CachedRealm cached = cache.get(id, CachedRealm.class);
+        RealmAdapter adapter;
+        if (cached == null) {
+            Long loaded = cache.getCurrentRevision(id);
+            RealmModel model = getRealmDelegate().getRealm(id);
+            if (model == null) {
+                return null;
+            }
+            cached = new CachedRealm(loaded, model);
+            cache.addRevisioned(cached, startupRevision);
+            adapter = new RealmAdapter(session, cached, this);
             CachedRealmModel.RealmCachedEvent event = new CachedRealmModel.RealmCachedEvent() {
                 @Override
                 public CachedRealmModel getRealm() {
@@ -433,8 +449,10 @@ public class RealmCacheSession implements CacheRealmProvider {
                 }
             };
             session.getKeycloakSessionFactory().publish(event);
+        } else {
+            adapter = new RealmAdapter(session, cached, this);
+            logger.tracev("by id cache hit after locking: {0}", cached.getName());
         }
-        managedRealms.put(id, adapter);
         return adapter;
     }
 
@@ -593,7 +611,7 @@ public class RealmCacheSession implements CacheRealmProvider {
         client.getRolesStream().forEach(role -> {
             roleRemovalInvalidations(role.getId(), role.getName(), client.getId());
         });
-        
+
         if (client.isServiceAccountsEnabled()) {
             UserModel serviceAccount = session.users().getServiceAccount(client);
 
@@ -1021,7 +1039,17 @@ public class RealmCacheSession implements CacheRealmProvider {
 
     @Override
     public Stream<GroupModel> searchForGroupByNameStream(RealmModel realm, String search, Integer first, Integer max) {
-        return getGroupDelegate().searchForGroupByNameStream(realm, search, first, max);
+        return getGroupDelegate().searchForGroupByNameStream(realm, search, false, first, max);
+    }
+
+    @Override
+    public Stream<GroupModel> searchForGroupByNameStream(RealmModel realm, String search, Boolean exact, Integer firstResult, Integer maxResults) {
+       return getGroupDelegate().searchForGroupByNameStream(realm, search, exact, firstResult, maxResults);
+    }
+
+    @Override
+    public Stream<GroupModel> searchGroupsByAttributes(RealmModel realm, Map<String, String> attributes, Integer firstResult, Integer maxResults) {
+        return getGroupDelegate().searchGroupsByAttributes(realm, attributes, firstResult, maxResults);
     }
 
     @Override
@@ -1152,6 +1180,9 @@ public class RealmCacheSession implements CacheRealmProvider {
         StorageId storageId = new StorageId(cached.getId());
         if (!storageId.isLocal()) {
             ComponentModel component = realm.getComponent(storageId.getProviderId());
+            if (component == null) {
+                return null;
+            }
             ClientStorageProviderModel model = new ClientStorageProviderModel(component);
 
             // although we do set a timeout, Infinispan has no guarantees when the user will be evicted

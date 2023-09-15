@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Red Hat, Inc. and/or its affiliates
+ * Copyright 2022 Red Hat, Inc. and/or its affiliates
  * and other contributors as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,7 +29,7 @@ import org.keycloak.representations.idm.authorization.PermissionTicketToken;
 import org.keycloak.services.ErrorResponseException;
 import org.keycloak.services.Urls;
 
-import javax.ws.rs.core.Response;
+import jakarta.ws.rs.core.Response;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -74,7 +74,7 @@ public class AbstractPermissionService {
                     throw new ErrorResponseException("invalid_resource_id", "Resource id or name not provided.", Response.Status.BAD_REQUEST);
                 }
             } else {
-                Resource resource = resourceStore.findById(resourceServer, resourceSetId);
+                Resource resource = resourceStore.findById(resourceServer.getRealm(), resourceServer, resourceSetId);
 
                 if (resource != null) {
                     resources.add(resource);

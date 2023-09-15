@@ -97,17 +97,20 @@ public class ApplianceBootstrap {
         session.getContext().setRealm(realm);
 
         if (session.users().getUsersCount(realm) > 0) {
-            throw new IllegalStateException("Can't create initial user as users already exists");
+            ServicesLogger.LOGGER.addAdminUserFailedAdminExists(Config.getAdminRealm());
+            return;
         }
 
         UserModel adminUser = session.users().addUser(realm, username);
         adminUser.setEnabled(true);
 
         UserCredentialModel usrCredModel = UserCredentialModel.password(password);
-        session.userCredentialManager().updateCredential(realm, adminUser, usrCredModel);
+        adminUser.credentialManager().updateCredential(usrCredModel);
 
         RoleModel adminRole = realm.getRole(AdminRoles.ADMIN);
         adminUser.grantRole(adminRole);
+
+        ServicesLogger.LOGGER.addUserSuccess(username, Config.getAdminRealm());
     }
 
 }

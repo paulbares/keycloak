@@ -3,6 +3,8 @@
 The module holds the codebase to build the Keycloak Operator on top of [Quarkus](https://quarkus.io/).
 Using the [Quarkus Operator SDK](https://github.com/quarkiverse/quarkus-operator-sdk).
 
+Also see [Operator guides](https://www.keycloak.org/guides#operator)
+
 ## Activating the Module
 
 When build from the project root directory, this module is only enabled if the installed JDK is 11 or newer. 
@@ -14,8 +16,14 @@ Ensure you have JDK 11 (or newer) installed.
 Build the Docker image with:
 
 ```bash
-mvn clean package -Doperator -Dquarkus.container-image.build=true
+mvn clean package -Dquarkus.container-image.build=true
 ```
+
+This will build a container image from `Dockerfile`, using `docker` by default. `podman` is also supported if you do these steps beforehand:
+
+- Follow [this guide](https://quarkus.io/guides/podman#setting-docker_host-on-linux) to enable the podman user socket
+- Set the `DOCKER_HOST` environment variable to point at this user socket. For example: `DOCKER_HOST=unix:///run/user/1000/podman/podman.sock`.
+- You may also have to set `QUARKUS_DOCKER_EXECUTABLE_NAME=podman`
 
 ## Configuration
 
@@ -44,12 +52,13 @@ eval $(minikube -p minikube docker-env)
 Compile the project and generate the Docker image with JIB:
 
 ```bash
-mvn clean package -Doperator -Dquarkus.container-image.build=true -Dquarkus.kubernetes.deployment-target=minikube
+mvn clean package -Dquarkus.kubernetes.image-pull-policy=IfNotPresent -Dquarkus.container-image.build=true
 ```
 
 Install the CRD definition and the operator in the cluster in the `keycloak` namespace:
 
 ```bash
+kubectl create namespace keycloak
 kubectl apply -k target
 ```
 
@@ -77,7 +86,7 @@ Testing allows 2 methods specified in the property `test.operator.deployment` : 
 mvn clean verify \
   -Dquarkus.container-image.build=true \
   -Dquarkus.container-image.tag=test \
-  -Dquarkus.kubernetes.deployment-target=kubernetes \
+  -Dquarkus.kubernetes.image-pull-policy=IfNotPresent \
   -Dtest.operator.deployment=remote
 ```
 
@@ -86,9 +95,9 @@ To run tests on Mac with `minikube` and the `docker` driver you should run `mini
 -Dtest.operator.kubernetes.ip=localhost
 ```
 
-On Linux or on Mac using `minikube` on a VM, instead you should pass this additional property:
+On Linux or on Mac using `minikube` on a VM, instead you should enable ingress:
 ```bash
--Dtest.operator.kubernetes.ip=$(minikube ip)
+minikube addons enable ingress
 ```
 
 To avoid skipping tests that are depending on custom Keycloak images, you need to build those first:
@@ -101,4 +110,19 @@ And run the tests passing an extra Java property:
 
 ```bash
 -Dtest.operator.custom.image=custom-keycloak:latest
+```
+
+### Testing using a pre-built operator image from a remote registry
+You can run the testsuite using an already built operator image from a remote image registry. 
+
+To do this, you need to set `quarkus.container-image.build=false` and specify the desired image 
+you want to use by setting `quarkus.container-image.image=<your-image>:<your-tag>`
+
+#### Example:
+
+```bash
+ mvn clean verify \
+      -Dquarkus.container-image.build=false \
+      -Dquarkus.container-image.image=quay.io/keycloak/keycloak-operator:nightly \
+      -Dtest.operator.deployment=remote
 ```

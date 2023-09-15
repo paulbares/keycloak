@@ -59,13 +59,13 @@ public interface MapClientEntity extends AbstractEntity, UpdatableEntity, Entity
         @Override
         public boolean isUpdated() {
             return this.updated
-                    || Optional.ofNullable(getProtocolMappers()).orElseGet(Collections::emptyMap).values().stream().anyMatch(MapProtocolMapperEntity::isUpdated);
+                    || Optional.ofNullable(getProtocolMappers()).orElseGet(Collections::emptySet).stream().anyMatch(MapProtocolMapperEntity::isUpdated);
         }
 
         @Override
         public void clearUpdatedFlag() {
             this.updated = false;
-            Optional.ofNullable(getProtocolMappers()).orElseGet(Collections::emptyMap).values().forEach(UpdatableEntity::clearUpdatedFlag);
+            Optional.ofNullable(getProtocolMappers()).orElseGet(Collections::emptySet).forEach(UpdatableEntity::clearUpdatedFlag);
         }
 
         @Override
@@ -82,9 +82,9 @@ public interface MapClientEntity extends AbstractEntity, UpdatableEntity, Entity
     void setClientScope(String id, Boolean defaultScope);
     void removeClientScope(String id);
 
-    MapProtocolMapperEntity getProtocolMapper(String id);
-    Map<String, MapProtocolMapperEntity> getProtocolMappers();
-    void setProtocolMapper(String id, MapProtocolMapperEntity mapping);
+    Optional<MapProtocolMapperEntity> getProtocolMapper(String id);
+    Set<MapProtocolMapperEntity> getProtocolMappers();
+    void addProtocolMapper(MapProtocolMapperEntity mapping);
     void removeProtocolMapper(String id);
 
     void addRedirectUri(String redirectUri);

@@ -16,6 +16,7 @@
  */
 package org.keycloak.testsuite.adapter.servlet;
 
+import com.google.common.collect.ImmutableMap;
 import org.jboss.arquillian.container.test.api.Deployment;
 import org.jboss.arquillian.container.test.api.OperateOnDeployment;
 import org.jboss.arquillian.graphene.page.Page;
@@ -23,29 +24,37 @@ import org.jboss.arquillian.test.api.ArquillianResource;
 import org.jboss.shrinkwrap.api.spec.WebArchive;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.BeforeClass;
 import org.junit.Test;
 import org.keycloak.OAuth2Constants;
+import org.keycloak.admin.client.resource.ClientResource;
 import org.keycloak.admin.client.resource.RealmResource;
 import org.keycloak.authorization.model.Policy;
 import org.keycloak.authorization.model.ResourceServer;
 import org.keycloak.broker.oidc.OIDCIdentityProviderConfig;
+import org.keycloak.broker.oidc.mappers.UserAttributeMapper;
 import org.keycloak.common.Profile;
 import org.keycloak.exportimport.ExportImportConfig;
 import org.keycloak.exportimport.singlefile.SingleFileExportProviderFactory;
 import org.keycloak.jose.jws.JWSInput;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.Constants;
+import org.keycloak.models.IdentityProviderMapperModel;
+import org.keycloak.models.IdentityProviderMapperSyncMode;
 import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
+import org.keycloak.protocol.oidc.OIDCConfigAttributes;
 import org.keycloak.protocol.oidc.OIDCLoginProtocol;
 import org.keycloak.protocol.oidc.OIDCLoginProtocolService;
+import org.keycloak.protocol.oidc.mappers.HardcodedClaim;
+import org.keycloak.protocol.oidc.mappers.OIDCAttributeMapperHelper;
 import org.keycloak.representations.AccessToken;
 import org.keycloak.representations.AccessTokenResponse;
 import org.keycloak.representations.idm.ClientRepresentation;
 import org.keycloak.representations.idm.FederatedIdentityRepresentation;
+import org.keycloak.representations.idm.IdentityProviderMapperRepresentation;
 import org.keycloak.representations.idm.IdentityProviderRepresentation;
+import org.keycloak.representations.idm.ProtocolMapperRepresentation;
 import org.keycloak.representations.idm.RealmRepresentation;
 import org.keycloak.representations.idm.RoleRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
@@ -53,7 +62,6 @@ import org.keycloak.representations.idm.authorization.ClientPolicyRepresentation
 import org.keycloak.representations.idm.authorization.DecisionStrategy;
 import org.keycloak.services.resources.admin.permissions.AdminPermissionManagement;
 import org.keycloak.services.resources.admin.permissions.AdminPermissions;
-import org.keycloak.testsuite.ProfileAssume;
 import org.keycloak.testsuite.adapter.AbstractServletsAdapterTest;
 import org.keycloak.testsuite.arquillian.annotation.AppServerContainer;
 import org.keycloak.testsuite.arquillian.annotation.DisableFeature;
@@ -61,28 +69,29 @@ import org.keycloak.testsuite.arquillian.annotation.EnableFeature;
 import org.keycloak.testsuite.arquillian.annotation.UncaughtServerErrorExpected;
 import org.keycloak.testsuite.broker.BrokerTestTools;
 import org.keycloak.testsuite.page.AbstractPageWithInjectedUrl;
-import org.keycloak.testsuite.pages.AccountUpdateProfilePage;
 import org.keycloak.testsuite.pages.ErrorPage;
 import org.keycloak.testsuite.pages.LoginPage;
 import org.keycloak.testsuite.pages.LoginUpdateProfilePage;
 import org.keycloak.testsuite.util.AdminClientUtil;
-import org.keycloak.testsuite.util.ContainerAssume;
 import org.keycloak.testsuite.util.OAuthClient;
 import org.keycloak.testsuite.util.WaitUtils;
 import org.keycloak.testsuite.utils.arquillian.ContainerConstants;
 import org.keycloak.util.BasicAuthHelper;
 
-import javax.ws.rs.client.Client;
-import javax.ws.rs.client.Entity;
-import javax.ws.rs.client.WebTarget;
-import javax.ws.rs.core.Form;
-import javax.ws.rs.core.HttpHeaders;
-import javax.ws.rs.core.Response;
-import javax.ws.rs.core.UriBuilder;
+import jakarta.ws.rs.client.Client;
+import jakarta.ws.rs.client.Entity;
+import jakarta.ws.rs.client.WebTarget;
+import jakarta.ws.rs.core.Form;
+import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriBuilder;
 import java.io.File;
 import java.net.URL;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.keycloak.testsuite.admin.ApiUtil.createUserAndResetPasswordWithAdminClient;
 
@@ -93,11 +102,11 @@ import static org.keycloak.testsuite.admin.ApiUtil.createUserAndResetPasswordWit
  */
 @AppServerContainer(ContainerConstants.APP_SERVER_UNDERTOW)
 @AppServerContainer(ContainerConstants.APP_SERVER_WILDFLY)
-@AppServerContainer(ContainerConstants.APP_SERVER_WILDFLY_DEPRECATED)
 @AppServerContainer(ContainerConstants.APP_SERVER_EAP)
 @AppServerContainer(ContainerConstants.APP_SERVER_EAP6)
 @AppServerContainer(ContainerConstants.APP_SERVER_EAP71)
 @EnableFeature(value = Profile.Feature.TOKEN_EXCHANGE, skipRestart = true)
+@EnableFeature(value = Profile.Feature.ADMIN_FINE_GRAINED_AUTHZ, skipRestart = true)
 public class BrokerLinkAndTokenExchangeTest extends AbstractServletsAdapterTest {
     public static final String CHILD_IDP = "child";
     public static final String PARENT_IDP = "parent-idp";
@@ -107,11 +116,6 @@ public class BrokerLinkAndTokenExchangeTest extends AbstractServletsAdapterTest 
     public static final String UNAUTHORIZED_CHILD_CLIENT = "unauthorized-child-client";
     public static final String PARENT_CLIENT = "parent-client";
 
-    @BeforeClass
-    public static void enabled() {
-        ProfileAssume.assumeFeatureEnabled(Profile.Feature.AUTHORIZATION);
-    }
-
     @Deployment(name = ClientApp.DEPLOYMENT_NAME)
     protected static WebArchive accountLink() {
         return servletDeployment(ClientApp.DEPLOYMENT_NAME, LinkAndExchangeServlet.class, ServletTestUtils.class);
@@ -119,9 +123,6 @@ public class BrokerLinkAndTokenExchangeTest extends AbstractServletsAdapterTest 
 
     @Page
     protected LoginUpdateProfilePage loginUpdateProfilePage;
-
-    @Page
-    protected AccountUpdateProfilePage profilePage;
 
     @Page
     private LoginPage loginPage;
@@ -171,6 +172,11 @@ public class BrokerLinkAndTokenExchangeTest extends AbstractServletsAdapterTest 
         servlet.getRedirectUris().add(uri + "/*");
         servlet.setSecret("password");
         servlet.setFullScopeAllowed(true);
+
+        Map<String, String> attributes = Optional.ofNullable(servlet.getAttributes()).orElse(new HashMap<>());
+        attributes.put(OIDCConfigAttributes.EXCLUDE_ISSUER_FROM_AUTH_RESPONSE, Boolean.TRUE.toString());
+        servlet.setAttributes(attributes);
+
         realm.setClients(new LinkedList<>());
         realm.getClients().add(servlet);
 
@@ -234,7 +240,7 @@ public class BrokerLinkAndTokenExchangeTest extends AbstractServletsAdapterTest 
         user.setUsername(PARENT3_USERNAME);
         user.setFirstName("first name");
         user.setLastName("last name");
-        user.setEmail("email");
+        user.setEmail("email@keycloak.org");
         user.setEnabled(true);
         createUserAndResetPasswordWithAdminClient(realm, user, "password");        
     }
@@ -504,8 +510,6 @@ public class BrokerLinkAndTokenExchangeTest extends AbstractServletsAdapterTest 
     @Test
     @UncaughtServerErrorExpected
     public void testExportImport() throws Exception {
-        ContainerAssume.assumeNotAuthServerRemote();
-
         testExternalExchange();
 
         try {
@@ -758,12 +762,77 @@ public class BrokerLinkAndTokenExchangeTest extends AbstractServletsAdapterTest 
             Assert.assertEquals(PARENT3_USERNAME, token.getPreferredUsername());
             Assert.assertEquals("first name", token.getGivenName());
             Assert.assertEquals("last name", token.getFamilyName());
-            Assert.assertEquals("email", token.getEmail());
+            Assert.assertEquals("email@keycloak.org", token.getEmail());
 
             // cleanup remove the user
             childRealm.users().get(token.getSubject()).remove();
         } finally {
             httpClient.close();
+        }
+    }
+
+    @Test
+    public void testExternalExchangeCreateNewUserUsingMappers() throws Exception {
+        RealmResource parentRealm = adminClient.realms().realm(PARENT_IDP);
+        ProtocolMapperRepresentation claimMapper = new ProtocolMapperRepresentation();
+        claimMapper.setName("custom-claim-hardcoded-mapper");
+        claimMapper.setProtocol(OIDCLoginProtocol.LOGIN_PROTOCOL);
+        claimMapper.setProtocolMapper(HardcodedClaim.PROVIDER_ID);
+        Map<String, String> config = new HashMap<>();
+        config.put(OIDCAttributeMapperHelper.TOKEN_CLAIM_NAME, "claim-from-idp");
+        config.put(HardcodedClaim.CLAIM_VALUE, "true");
+        config.put(OIDCAttributeMapperHelper.INCLUDE_IN_ACCESS_TOKEN, "true");
+        config.put(OIDCAttributeMapperHelper.INCLUDE_IN_USERINFO, "true");
+        claimMapper.setConfig(config);
+        ClientRepresentation client = parentRealm.clients().findByClientId(PARENT_CLIENT).get(0);
+        ClientResource clientResource = parentRealm.clients().get(client.getId());
+        clientResource.getProtocolMappers().createMapper(claimMapper).close();
+
+        RealmResource childRealm = adminClient.realms().realm(CHILD_IDP);
+        IdentityProviderMapperRepresentation attributeMapper = new IdentityProviderMapperRepresentation();
+        attributeMapper.setName("attribute-mapper");
+        attributeMapper.setIdentityProviderMapper(UserAttributeMapper.PROVIDER_ID);
+        attributeMapper.setIdentityProviderAlias(PARENT_IDP);
+        attributeMapper.setConfig(ImmutableMap.<String,String>builder()
+                .put(IdentityProviderMapperModel.SYNC_MODE, IdentityProviderMapperSyncMode.INHERIT.toString())
+                .put(UserAttributeMapper.CLAIM, "claim-from-idp")
+                .put(UserAttributeMapper.USER_ATTRIBUTE, "claim-to-broker")
+                .build());
+        childRealm.identityProviders().get(PARENT_IDP).addMapper(attributeMapper).close();
+
+        String idToken = oauth.doGrantAccessTokenRequest(PARENT_IDP, PARENT3_USERNAME, "password", null, PARENT_CLIENT, "password").getAccessToken();
+        Assert.assertEquals(0, adminClient.realm(CHILD_IDP).getClientSessionStats().size());
+
+        try (Client httpClient = AdminClientUtil.createResteasyClient()) {
+            WebTarget exchangeUrl = childTokenExchangeWebTarget(httpClient);
+            IdentityProviderRepresentation rep = adminClient.realm(CHILD_IDP).identityProviders().get(PARENT_IDP).toRepresentation();
+            rep.getConfig().put(OIDCIdentityProviderConfig.VALIDATE_SIGNATURE, String.valueOf(false));
+            adminClient.realm(CHILD_IDP).identityProviders().get(PARENT_IDP).update(rep);
+
+            AccessToken token;
+            try (Response response = exchangeUrl.request()
+                    .header(HttpHeaders.AUTHORIZATION, BasicAuthHelper.createHeader(ClientApp.DEPLOYMENT_NAME, "password"))
+                    .post(Entity.form(
+                            new Form()
+                                    .param(OAuth2Constants.GRANT_TYPE, OAuth2Constants.TOKEN_EXCHANGE_GRANT_TYPE)
+                                    .param(OAuth2Constants.SUBJECT_TOKEN, idToken)
+                                    .param(OAuth2Constants.SUBJECT_TOKEN_TYPE, OAuth2Constants.JWT_TOKEN_TYPE)
+                                    .param(OAuth2Constants.SUBJECT_ISSUER, PARENT_IDP)
+                                    .param(OAuth2Constants.SCOPE, OAuth2Constants.SCOPE_OPENID)
+                    ))) {
+                Assert.assertEquals(200, response.getStatus());
+
+                AccessTokenResponse tokenResponse = response.readEntity(AccessTokenResponse.class);
+                JWSInput jws = new JWSInput(tokenResponse.getToken());
+                token = jws.readJsonContent(AccessToken.class);
+            }
+
+            UserRepresentation newUser = childRealm.users().search(PARENT3_USERNAME).get(0);
+            Assert.assertNotNull(newUser.getAttributes());
+            Assert.assertTrue(newUser.getAttributes().containsKey("claim-to-broker"));
+
+            // cleanup remove the user
+            childRealm.users().get(token.getSubject()).remove();
         }
     }
 
